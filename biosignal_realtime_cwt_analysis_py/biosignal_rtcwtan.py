@@ -291,4 +291,4 @@ if __name__ == '__main__':
         #pyplot.plot(np.convolve(WA, GAUSS_FILTER, 'same'), linewidth=0.2)
         np.savetxt('bio.csv', WA, delimiter=",", fmt='%.10f')
         pyplot.plot(WA, linewidth=0.2)
-        pyplot.savefig('D:\\bio.svg')
+        pyplot.savefig('bio.svg')
