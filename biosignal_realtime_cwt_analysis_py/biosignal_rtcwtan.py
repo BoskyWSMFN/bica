@@ -182,6 +182,10 @@ def readMem(bts, pBuf, svpos):
         posMod(POSITION)
     return bts(bts_n.view(dtype=bts)).value
 
+def createMVData(data):
+    global MEMORY_BUFFER
+    return np.array(readMem(FLOAT, MEMORY_BUFFER, True))
+
 def getMVData(data):
     global MEMORY_BUFFER
     return np.append(data, readMem(FLOAT, MEMORY_BUFFER, True))
@@ -233,7 +237,7 @@ if __name__ == '__main__':
     pBufMod(pBuf)
     POSITION = Int64Size*3
     Freq = readMem(INT64, pBuf, True)
-    CwtFreq = Freq/10
+    CwtFreq = Freq/0.1
     print(Freq)
     Channels = readMem(INT64, pBuf, True)
     print(Channels)
@@ -258,20 +262,39 @@ if __name__ == '__main__':
     print(Cut)
     cwtCut = Cut
     cnt = Cut
+    Flow = True
+    FlowCwt = True
+    FlowTime = True
+    FlowMVData = True
     try:
         while Cut-cnt < 10000:
+            if Flow:
+                cwtCut = Cut
+                cnt = Cut
             oldCut = Cut
             POSITION = Int64Size*2
             Cut = readMem(INT64, pBuf, False)
             
             if oldCut == Cut-1:
+                if Flow:
+                    Flow = False
 
                 POSITION = ((Int64Size*5 + IntegerSize*ExpectedChannels*2 + NameExpectedLength*AnsiCharSize) + 
                        ((DateTimeSize + Int64Size + SingleSize*ExpectedChannels)*(divmod(Cut, MaxData)[1])))
                 AstrTime = datetime_fromdelphi(readMem(DOUBLE, pBuf, True)).timestamp()
                 POSITION = (POSITION+Int64Size)
-                DataMV = list(map(getMVData, DataMV))
-                CwtT = np.append(CwtT, AstrTime)
+                if FlowMVData:
+                    DataMV = list(map(createMVData, DataMV))
+                    FlowMVData = False
+                else:
+                    DataMV = list(map(getMVData, DataMV))
+                
+                if FlowTime:
+                    CwtT = np.array(AstrTime)
+                    FlowTime = False
+                else:
+                    CwtT = np.append(CwtT, AstrTime)
+                
                 if Cut-cwtCut >= CwtFreq:
                     cwtCut = Cut
                     if find(np.diff(CwtT)<=0).size > 0:
@@ -279,10 +302,15 @@ if __name__ == '__main__':
                     CwtT = CwtT-np.min(CwtT)
                     CWT_T = np.mean(np.diff(CwtT))
                     CwtD = list(map(getCwt, DataMV))
-                    CwtT = np.empty(0, dtype=float)
-                    DataMV = list(map(getEmpty, DataMV))
+                    FlowTime = True
+                    FlowMVData = True
                     print(datetime.fromtimestamp(AstrTime), Cut, CwtD, '\n')
-                    WA = np.append(WA, CwtD[0])
+                    if FlowCwt:
+                        WA = CwtD[0]
+                        FlowCwt = False
+                    else:
+                        WA = np.append(WA, CwtD[0])
+                    
             else:
                 continue
     finally:
