@@ -188,7 +188,12 @@ def createMVData(data):
 
 def getMVData(data):
     global MEMORY_BUFFER
-    return np.append(data, readMem(FLOAT, MEMORY_BUFFER, True))
+    data = np.asanyarray(data)
+    if data.ndim != 1:
+        data = data.ravel()
+    values = np.ravel(readMem(FLOAT, MEMORY_BUFFER, True))
+    axis = data.ndim-1
+    return np.concatenate((data, values), axis = axis)
 
 #-CWT part--------------------------------------------------------------------
 """
@@ -203,7 +208,8 @@ def getCwt(data):
     #z2_0 = np.transpose(np.mean(x1[21:32], axis=0))
     #return np.convolve(z2_0, GAUSS_FILTER, 'same')
     #return z2_0
-    return np.abs(coefs)**2
+    #return np.trim_zeros(np.convolve(np.transpose(np.mean((np.abs(coefs)**2)[21:32], axis=0)), GAUSS_FILTER, 'same'), 'fb')
+    return (np.abs(coefs)**2)
 
 #-----------------------------------------------------------------------------
 
@@ -260,7 +266,6 @@ if __name__ == '__main__':
     POSITION = Int64Size*2
     Cut = readMem(INT64, pBuf, True)
     print(Cut)
-    cwtCut = Cut
     cnt = Cut
     Flow = True
     FlowCwt = True
@@ -293,7 +298,12 @@ if __name__ == '__main__':
                     CwtT = np.array(AstrTime)
                     FlowTime = False
                 else:
-                    CwtT = np.append(CwtT, AstrTime)
+                    CwtT = np.asanyarray(CwtT)
+                    if CwtT.ndim != 1:
+                        CwtT = CwtT.ravel()
+                    values = np.ravel(AstrTime)
+                    axis = CwtT.ndim-1
+                    CwtT = np.concatenate((CwtT, values), axis = axis)
                 
                 if Cut-cwtCut >= CwtFreq:
                     cwtCut = Cut
@@ -306,10 +316,10 @@ if __name__ == '__main__':
                     FlowMVData = True
                     print(datetime.fromtimestamp(AstrTime), Cut, CwtD, '\n')
                     if FlowCwt:
-                        WA = CwtD[0]
+                        WA = CwtD[2]
                         FlowCwt = False
                     else:
-                        WA = np.append(WA, CwtD[0])
+                        WA = np.append(WA, CwtD[2], axis = CwtD[2].ravel().ndim)
                     
             else:
                 continue
