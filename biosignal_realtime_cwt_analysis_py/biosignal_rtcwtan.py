@@ -294,3 +294,4 @@ if __name__ == '__main__':
         np.savetxt('bio.csv', WA, delimiter=",", fmt='%.10f')
         pyplot.plot(WA, linewidth=0.2)
         pyplot.savefig('bio.svg')
+        
