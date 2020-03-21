@@ -195,9 +195,11 @@ def getCwt(data):
     global CWT_T
     global GAUSS_FILTER
     coefs, scales, freqs, coi, fft, fftfreqs = wavelet.cwt(data, dt=CWT_T, wavelet=wavelet.Morlet(6.))#, freqs=np.full((100,), 1000, dtype=int))
-    x1 = np.abs(coefs)**2
-    z2_0 = np.transpose(np.mean(x1[21:32], axis=0))
-    return np.average(np.convolve(z2_0, GAUSS_FILTER, 'same'))
+    #x1 = np.abs(coefs)**2
+    #z2_0 = np.transpose(np.mean(x1[21:32], axis=0))
+    #return np.convolve(z2_0, GAUSS_FILTER, 'same')
+    #return z2_0
+    return np.abs(coefs)**2
 
 #-----------------------------------------------------------------------------
 
@@ -257,7 +259,7 @@ if __name__ == '__main__':
     cwtCut = Cut
     cnt = Cut
     try:
-        while Cut-cnt < 20000:
+        while Cut-cnt < 10000:
             oldCut = Cut
             POSITION = Int64Size*2
             Cut = readMem(INT64, pBuf, False)
@@ -291,4 +293,4 @@ if __name__ == '__main__':
         #pyplot.plot(np.convolve(WA, GAUSS_FILTER, 'same'), linewidth=0.2)
         np.savetxt('bio.csv', WA, delimiter=",", fmt='%.10f')
         pyplot.plot(WA, linewidth=0.2)
-        pyplot.savefig('D:\\bio.svg')
+        pyplot.savefig('bio.svg')
