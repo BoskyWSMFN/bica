@@ -191,9 +191,7 @@ def getMVData(data):
     data = np.asanyarray(data)
     if data.ndim != 1:
         data = data.ravel()
-    values = np.ravel(readMem(FLOAT, MEMORY_BUFFER, True))
-    axis = data.ndim-1
-    return np.concatenate((data, values), axis = axis)
+    return np.concatenate((data, np.ravel(readMem(FLOAT, MEMORY_BUFFER, True))), axis = data.ndim-1)
 
 #-CWT part--------------------------------------------------------------------
 """
@@ -208,7 +206,7 @@ def getCwt(data):
     #z2_0 = np.transpose(np.mean(x1[21:32], axis=0))
     #return np.convolve(z2_0, GAUSS_FILTER, 'same')
     #return z2_0
-    #return np.trim_zeros(np.convolve(np.transpose(np.mean((np.abs(coefs)**2)[21:32], axis=0)), GAUSS_FILTER, 'same'), 'fb')
+    #return np.transpose(np.mean((np.abs(coefs)**2)[21:32], axis=0))
     return (np.abs(coefs)**2)
 
 #-----------------------------------------------------------------------------
@@ -243,7 +241,8 @@ if __name__ == '__main__':
     pBufMod(pBuf)
     POSITION = Int64Size*3
     Freq = readMem(INT64, pBuf, True)
-    CwtFreq = Freq/0.1
+    CwtFreq = Freq/5
+    ChannelToShow = 0
     print(Freq)
     Channels = readMem(INT64, pBuf, True)
     print(Channels)
@@ -301,9 +300,7 @@ if __name__ == '__main__':
                     CwtT = np.asanyarray(CwtT)
                     if CwtT.ndim != 1:
                         CwtT = CwtT.ravel()
-                    values = np.ravel(AstrTime)
-                    axis = CwtT.ndim-1
-                    CwtT = np.concatenate((CwtT, values), axis = axis)
+                    CwtT = np.concatenate((CwtT, np.ravel(AstrTime)), axis = CwtT.ndim-1)
                 
                 if Cut-cwtCut >= CwtFreq:
                     cwtCut = Cut
@@ -319,7 +316,7 @@ if __name__ == '__main__':
                         WA = CwtD[2]
                         FlowCwt = False
                     else:
-                        WA = np.append(WA, CwtD[2], axis = CwtD[2].ravel().ndim)
+                        WA = np.append(np.asanyarray(WA), np.asanyarray(CwtD[ChannelToShow]), axis = 1)
                     
             else:
                 continue
