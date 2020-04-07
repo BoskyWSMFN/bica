@@ -1,17 +1,15 @@
-#!/usr/bin/env python
-# -*- coding: utf8 -*-
+# -*- coding: utf-8 -*-
 from __future__ import division
 from ctypes import *
 from ctypes.wintypes import *
 from datetime import datetime, timedelta
-from matplotlib import pyplot
-from pycwt.helpers import find
+from mpl_toolkits import mplot3d
+from matplotlib import pyplot as plt
 from scipy import signal
-from scipy.ndimage import gaussian_filter
-import pycwt as wavelet
+from pycwt.helpers import fft_kwargs
+from scipy.fftpack import fft, ifft, fftfreq
+import pycwt.wavelet as wavelet
 import numpy as np
-import sys
-import struct
 
 #clibptr = cdll.LoadLibrary("libpointers.so")
 #clibptr = cdll.msvcrt
@@ -139,8 +137,15 @@ RtlMoveMemory.argtypes = (
 
 POSITION = 0
 MEMORY_BUFFER = 0
-CWT_T = np.empty(0, dtype=float)
+CWT_T = np.empty(0, dtype=float) #dt
 GAUSS_FILTER = signal.gaussian(20000, std=10)/sum(signal.gaussian(20000, std=10))
+EST_WAVELET = wavelet._check_parameter_wavelet(wavelet.Morlet(6.)) #Morlet wavelet with ω0=6
+DJ = 1/12 #Twelve sub-octaves per octaves
+J = np.empty(0, dtype=float)
+S0 = np.empty(0, dtype=float)
+SJ_COL = np.empty(0, dtype=float)
+DATALEN = 0
+
 
 def pBufMod(pBuf):
     global MEMORY_BUFFER
@@ -193,6 +198,9 @@ def getMVData(data):
         data = data.ravel()
     return np.concatenate((data, np.ravel(readMem(FLOAT, MEMORY_BUFFER, True))), axis = data.ndim-1)
 
+def deleteData(data):
+    return np.delete(data, 0, axis = 0)
+
 #-CWT part--------------------------------------------------------------------
 """
 Uses ndarray of μV values, requires map() to use.
@@ -200,14 +208,16 @@ Uses ndarray of μV values, requires map() to use.
 
 def getCwt(data):
     global CWT_T
-    global GAUSS_FILTER
-    coefs, scales, freqs, coi, fft, fftfreqs = wavelet.cwt(data, dt=CWT_T, wavelet=wavelet.Morlet(6.))#, freqs=np.full((100,), 1000, dtype=int))
-    #x1 = np.abs(coefs)**2
-    #z2_0 = np.transpose(np.mean(x1[21:32], axis=0))
-    #return np.convolve(z2_0, GAUSS_FILTER, 'same')
-    #return z2_0
-    #return np.transpose(np.mean((np.abs(coefs)**2)[21:32], axis=0))
-    return (np.abs(coefs)**2)
+    global EST_WAVELET
+    global SJ_COL
+    global DATALEN
+    data_ft = fft(data, **fft_kwargs(data))
+    N = len(data_ft)
+    ftfreqs = 2 * np.pi * fftfreq(N, CWT_T)
+    psi_ft_bar = ((SJ_COL * ftfreqs[1] * N) ** .5 * np.conjugate(EST_WAVELET.psi_ft(SJ_COL * ftfreqs)))
+    W = ifft(data_ft * psi_ft_bar, axis=1, **fft_kwargs(data_ft, overwrite_x=True))
+    Power = np.abs(W[:, :DATALEN])**2
+    return np.transpose(np.mean(Power[21:32], axis=0))
 
 #-----------------------------------------------------------------------------
 
@@ -241,11 +251,12 @@ if __name__ == '__main__':
     pBufMod(pBuf)
     POSITION = Int64Size*3
     Freq = readMem(INT64, pBuf, True)
-    ArSize = Freq*10
-    CwtFreq = Freq/10
-    ChannelToShow = 0
+    ConcatSize = Freq*6
+    CwtFreq = Freq/5
+    ChannelToShow = 1
     print(Freq)
     Channels = readMem(INT64, pBuf, True)
+    Channels = 1
     print(Channels)
     LeadsAct = [0]*Channels
     LeadsPas = [0]*Channels
@@ -267,13 +278,16 @@ if __name__ == '__main__':
     Cut = readMem(INT64, pBuf, True)
     print(Cut)
     cnt = Cut
-    Flow = True
-    FlowCwt = True
-    FlowTime = True
-    FlowMVData = True
+    Flow = False
+    FlushCwt = True
+    FlushTime = True
+    FlushMVData = True
+    ConcatStart = False
+    DATALEN = ConcatSize
     try:
-        while Cut-cnt < 100000:
-            if Flow:
+        while Cut-cnt < Freq*1000:
+            if not Flow:
+                ConcatCut = Cut
                 cwtCut = Cut
                 cnt = Cut
             oldCut = Cut
@@ -281,53 +295,88 @@ if __name__ == '__main__':
             Cut = readMem(INT64, pBuf, False)
             
             if oldCut == Cut-1:
-                if Flow:
-                    Flow = False
+                if not Flow:
+                    Flow = True
+                    print("Job started...\n")
+                if Cut-ConcatCut > ConcatSize and not ConcatStart:
+                    ConcatStart = True
 
                 POSITION = ((Int64Size*5 + IntegerSize*ExpectedChannels*2 + NameExpectedLength*AnsiCharSize) + 
                        ((DateTimeSize + Int64Size + SingleSize*ExpectedChannels)*(divmod(Cut, MaxData)[1])))
                 AstrTime = datetime_fromdelphi(readMem(DOUBLE, pBuf, True)).timestamp()
+                #AstrTime = readMem(DOUBLE, pBuf, True)
                 POSITION = (POSITION+Int64Size)
-                if FlowMVData:
+                #MV Data concaternation
+                if FlushMVData:
                     DataMV = list(map(createMVData, DataMV))
-                    FlowMVData = False
+                    FlushMVData = False
                 else:
                     DataMV = list(map(getMVData, DataMV))
-                
-                if FlowTime:
+                    #
+                    if ConcatStart:
+                        DataMV = list(map(deleteData, DataMV))
+                    #
+                # Datetime concaternation
+                if FlushTime:
                     CwtT = np.array(AstrTime)
-                    FlowTime = False
+                    FlushTime = False
                 else:
-                    CwtT = np.asanyarray(CwtT)
-                    if CwtT.ndim != 1:
-                        CwtT = CwtT.ravel()
-                    CwtT = np.concatenate((CwtT, np.ravel(AstrTime)), axis = CwtT.ndim-1)
-                
-                if Cut-cwtCut >= CwtFreq:
+                    #CwtT = np.array(AstrTime)
+                    CwtT = np.append(CwtT, AstrTime)
+                    #
+                    if ConcatStart:
+                        CwtT = np.delete(CwtT, 0, axis = 0)
+                    #
+
+                #"""
+                if Cut-cwtCut > CwtFreq and ConcatStart:
                     cwtCut = Cut
-                    if find(np.diff(CwtT)<=0).size > 0:
-                        CwtT = np.linspace(start=np.min(CwtT), stop=np.max(CwtT), num=CwtT.size)
-                    CwtT = CwtT-np.min(CwtT)
-                    CWT_T = np.mean(np.diff(CwtT))
+                    CWT_T = np.diff(CwtT).mean(axis=0)
+                    #CWT_T = 1/Freq
+                    S0 = 2 * CWT_T / EST_WAVELET.flambda()
+                    J = np.int(np.round(np.log2(DATALEN * CWT_T / S0) / DJ))
+                    SJ_COL = (S0 * 2 ** (np.arange(0, J + 1) * DJ))[:, np.newaxis]
                     CwtD = list(map(getCwt, DataMV))
-                    FlowTime = True
-                    FlowMVData = True
-                    print(datetime.fromtimestamp(AstrTime), Cut, CwtD, '\n')
-                    if FlowCwt:
-                        WA = CwtD[2]
-                        FlowCwt = False
+                    #print(ConcatSize)
+                    #print(len(DataMV[ChannelToShow-1]))
+                    print(datetime.fromtimestamp(AstrTime), Cut, '\n')
+                    if FlushCwt:
+                        WA = np.asanyarray(CwtD[ChannelToShow - 1])
+                        FlushCwt = False
                     else:
-                        WA = np.append(np.asanyarray(WA), np.asanyarray(CwtD[ChannelToShow]), axis = 1)
-                    
+                        WA = np.append(WA, np.asanyarray(CwtD[ChannelToShow - 1]))
+                        #WA = np.append(WA, np.asanyarray(CwtD[ChannelToShow - 1]), axis = 0)
+                        #print(WA.shape)
+                        
+                #"""
+
             else:
                 continue
     finally:
-        print('---------------------------------------------------------------\nJob done!\n')
+        print('\n---------------------------------------------------------------\nJob done! Saving...\n')
         kernel32.CloseHandle(hMap)
         kernel32.UnmapViewOfFile(pBuf)
+        #xi = np.argsort(WA, axis = 0)
+        #yi = np.argsort(WA, axis = 1)
+        #X = np.take_along_axis(WA, xi, axis = 0)
+        #Y = np.take_along_axis(WA, yi, axis = 1)
+        #print(X,'\n', Y, '\n')
+        #X, Y = np.meshgrid(X, Y)
+        """
+        Z = np.sqrt(WA)
+        fig = plt.figure()
+        ax = plt.axes(projection='3d')
+        ax.contour3D(X, Y, Z, 50, cmap='viridis')
+        """
         #np.savetxt('bio.csv', np.convolve(WA, GAUSS_FILTER, 'same'), delimiter=",", fmt='%.10f')
-        #pyplot.plot(np.convolve(WA, GAUSS_FILTER, 'same'), linewidth=0.2)
-        np.savetxt('bio.csv', WA, delimiter=",", fmt='%.10f')
-        pyplot.plot(np.convolve(np.transpose(np.mean(WA[21:32], axis=0)), GAUSS_FILTER, 'same'), linewidth=0.2)
-        pyplot.savefig('bio.svg')
+        plt.plot(WA, linewidth=0.2)
+        #np.savetxt('bio.csv', WA, delimiter=",", fmt='%.10f')
+        #pyplot.plot(np.convolve(np.transpose(np.mean(WA[21:32], axis=0)), GAUSS_FILTER, 'same'), linewidth=0.2)
+        #pyplot.show()
+        #plt.imshow(WA)
+        plt.savefig('bio.svg')
+        print('Saved!\n')
         
+
+
+
