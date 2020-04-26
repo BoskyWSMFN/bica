@@ -280,9 +280,6 @@ class CWT(Thread):
                                                                self.wvlt)
             
             Power = np.array(np.abs(wave)**2, dtype=DOUBLE)
-            #Power = np.array(np.abs(wave[:,:int(self.Datalen.value)])**2, dtype=DOUBLE)
-            #return Power#[21:32]
-            #return np.array(np.transpose(np.mean(Power, axis = 0)), dtype=DOUBLE)
             return np.convolve(np.transpose(np.average(Power[21:32], axis = 0, weights=scales[21:32])),
             #return np.convolve(np.transpose(np.mean(Power, axis = 0)),
                                         self.gauss_filter, 'same')
@@ -352,7 +349,7 @@ def main():
     
     POSITION = Int64Size*3
     Freq = readMem(INT64, True)
-    ConcatSize = Freq*2
+    ConcatSize = Freq*1
     CwtFreq = Freq/10
     #CwtFreq = ConcatSize
     #ConcatSize = CwtFreq
