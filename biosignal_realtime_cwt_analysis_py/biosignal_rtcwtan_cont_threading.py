@@ -250,7 +250,6 @@ class CWT(Thread):
         self.dj=dj
         self.sj_col=np.empty((0,0), dtype=DOUBLE)
         self.Datalen=FLOAT(Datalen)
-        self.nfft=INT(np.int(2 ** np.ceil(np.log2(self.Datalen))))
     
     def run(self):
         CwtD = [np.empty(0, dtype=DOUBLE)]*self.Channels.value
@@ -259,14 +258,19 @@ class CWT(Thread):
         FlushCwt = True
         def _getCwt(data):
             """
-            data_ft = np.fft.fft(data, n=self.nfft.value)
+            data_ft = np.fft.fft(data, n=int(self.Datalen.value))
             N = INT(len(data_ft))
             ftfreqs = np.array(2 * np.pi * np.fft.fftfreq(N.value, self.CwtDT.value), dtype=DOUBLE)
             psi_ft_bar = np.array((self.sj_col * ftfreqs[1] * N.value) ** .5 *
                                   np.conjugate(self.wvlt.psi_ft(self.sj_col * ftfreqs)),
                                   dtype=LONGDOUBLE)
             wave = np.fft.ifft(data_ft * psi_ft_bar, axis=1,
-                            n=N.value)#np.int(2 ** np.ceil(np.log2(N))))
+                            n=N.value)
+            sel = np.invert(np.isnan(wave).all(axis=1))
+            if np.any(sel):
+                sj = sj[sel]
+                freqs = freqs[sel]
+                wave = wave[sel, :]
             """
             wave, scales, freqs, coi, fft, fftfreqs = wavelet.cwt(data[:int(self.Datalen.value)],
                                                                self.CwtDT.value,
@@ -275,11 +279,12 @@ class CWT(Thread):
                                                                self.j.value,
                                                                self.wvlt)
             
-            #Power = np.array(np.abs(fft)**2, dtype=DOUBLE)
-            Power = np.array(np.abs(wave[:,:int(self.Datalen.value)])**2, dtype=DOUBLE)
+            Power = np.array(np.abs(wave)**2, dtype=DOUBLE)
+            #Power = np.array(np.abs(wave[:,:int(self.Datalen.value)])**2, dtype=DOUBLE)
             #return Power#[21:32]
-            #return np.array(np.transpose(np.average(Power, axis = 0)), dtype=DOUBLE)
-            return np.convolve(np.transpose(np.mean(Power, axis = 0)),
+            #return np.array(np.transpose(np.mean(Power, axis = 0)), dtype=DOUBLE)
+            return np.convolve(np.transpose(np.average(Power[21:32], axis = 0, weights=scales[21:32])),
+            #return np.convolve(np.transpose(np.mean(Power, axis = 0)),
                                         self.gauss_filter, 'same')
         try:
             while not self.Break:
@@ -308,7 +313,8 @@ class CWT(Thread):
                         else:
                             #WA = signal.correlate(WA, CwtD[self.ChannelToShow.value - 1], mode='same')
                             #self.Break = True
-                            WA = np.concatenate((WA, CwtD[self.ChannelToShow.value - 1]), axis = 0)
+                            #WA = np.concatenate((WA, CwtD[self.ChannelToShow.value - 1]), axis = 0)
+                            WA = np.append(WA, CwtD[self.ChannelToShow.value - 1], axis = 0)
                 else:
                     continue
         finally:
@@ -346,8 +352,10 @@ def main():
     
     POSITION = Int64Size*3
     Freq = readMem(INT64, True)
-    ConcatSize = Freq*5
+    ConcatSize = Freq*2
     CwtFreq = Freq/10
+    #CwtFreq = ConcatSize
+    #ConcatSize = CwtFreq
     print(Freq)
     Channels = readMem(INT64, True)
     #Channels = 1
@@ -371,7 +379,7 @@ def main():
     FlushMVData = True
     Flow = False
     ConcatStart = False
-    GAUSS_FILTER = signal.gaussian(ConcatSize, std=10)
+    GAUSS_FILTER = signal.gaussian(CwtFreq, std=10)
     GAUSS_FILTER = GAUSS_FILTER/sum(GAUSS_FILTER)
     try:
         thread = CWT(EST_WAVELET, ConcatSize,
