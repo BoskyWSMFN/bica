@@ -5,10 +5,12 @@ from ctypes.wintypes import *
 from datetime import datetime, timedelta
 from matplotlib import pyplot as plt
 from scipy import signal
-from threading import Thread
+from threading import Thread, RLock
+#from multiprocessing import Pool as ThreadPool
 import pycwt
 import pycwt.wavelet as wavelet
 import numpy as np
+import win32api,win32process,win32con
 
 #clibptr = cdll.LoadLibrary("libpointers.so")
 #clibptr = cdll.msvcrt
@@ -69,8 +71,6 @@ POSITION = 0
 MEMORY_BUFFER = 0
 CHANNELS = 0
 CHANNELTOSHOW = 1
-gausssig = signal.gaussian(20000, std=10)
-GAUSS_FILTER = gausssig/sum(gausssig)
 EST_WAVELET = wavelet._check_parameter_wavelet(wavelet.Morlet(6.)) #Morlet wavelet with ω0=6
 DJ = 1/12 #Twelve sub-octaves per octaves
 
@@ -176,21 +176,21 @@ RtlMoveMemory.argtypes = (
 H_MAP = kernel32.OpenFileMappingW(FILE_MAP_ALL_ACCESS, False, TAGNAME)
 MEMORY_BUFFER = kernel32.MapViewOfFile(H_MAP, FILE_MAP_ALL_ACCESS, 0, 0, EXPECTED_SIZE)
 
-def pBufMod(pBuf):
-    global MEMORY_BUFFER
-    MEMORY_BUFFER = pBuf
-
-def dtMod(dt):
-    global CWT_DT
-    CWT_DT = dt
-
-def posMod(pos):
-    global POSITION
-    POSITION = pos
-
-def getCurPos():
-    global POSITION
-    return POSITION
+def setpriority(pid=None,priority=1):
+    """ Set The Priority of a Windows Process.  Priority is a value between 0-5 where
+        2 is normal priority.  Default sets the priority of the current
+        python process but can take any valid process ID. """
+    
+    priorityclasses = [win32process.IDLE_PRIORITY_CLASS,
+                       win32process.BELOW_NORMAL_PRIORITY_CLASS,
+                       win32process.NORMAL_PRIORITY_CLASS,
+                       win32process.ABOVE_NORMAL_PRIORITY_CLASS,
+                       win32process.HIGH_PRIORITY_CLASS,
+                       win32process.REALTIME_PRIORITY_CLASS]
+    if pid == None:
+        pid = win32api.GetCurrentProcessId()
+    handle = win32api.OpenProcess(win32con.PROCESS_ALL_ACCESS, True, pid)
+    win32process.SetPriorityClass(handle, priorityclasses[priority])
 
 def datetime_fromdelphi(dvalue):
     return DELPHI_EPOCH + timedelta(days=dvalue)
@@ -206,7 +206,6 @@ def readMem(bts, svpos, bytesout=False, datetimedouble=False):
     bts_n = np.array(bts_s)
     if svpos:
         POSITION += size
-        posMod(POSITION)
     if bytesout:
         return bts_n.view(dtype=bts)
     elif datetimedouble:
@@ -220,18 +219,12 @@ def createMVData(data):
 def getMVData(data):
     return np.concatenate((data, np.ndarray((1,), buffer=readMem(FLOAT, True, bytesout=True), dtype=FLOAT, order='C')), axis = 0)
 
-def deleteData(data):
-    return np.delete(data, 0, axis = 0)
 
 #-CWT part--------------------------------------------------------------------
-"""
-Uses ndarray of μV values, requires map() to use.
-"""
+
 class CWT(Thread):
     def __init__(self, wvlt, Datalen, Frequency=FLOAT(1000),
                  Channels=INT64(22), ChannelToShow=INT(1), dj=FLOAT(1/12),
-                 gauss_filter=np.array((signal.gaussian(1000, std=10)/
-                                        sum(signal.gaussian(1000, std=10))), dtype=FLOAT),
                  Cut=INT64(0), Break=False, Flow=False):
         Thread.__init__(self)
         self.Break = Break
@@ -241,22 +234,26 @@ class CWT(Thread):
         self.ChannelToShow=ChannelToShow
         self.Frequency=Frequency
         self.DataMV=[list()]*self.Channels.value
+        self.DataOP=[list()]*self.Channels.value
         self.CwtT=list()
         self.wvlt=wvlt
-        self.gauss_filter=gauss_filter
+        self.gauss_filter=np.empty((0,0), dtype=float)
         self.CwtDT=DOUBLE()
         self.s0=FLOAT()
         self.j=INT()
         self.dj=dj
-        self.sj_col=np.empty((0,0), dtype=DOUBLE)
+        #self.sj_col=np.empty((0,0), dtype=DOUBLE)
         self.Datalen=FLOAT(Datalen)
     
     def run(self):
         CwtD = [np.empty(0, dtype=DOUBLE)]*self.Channels.value
         WA = np.empty((0,0), dtype=DOUBLE)
-        Cut = self.Cut
         FlushCwt = True
+        #pool = ThreadPool(processes=self.Channels.value)
+        def _OPret(data):
+            return data[-(int(self.Datalen.value)):,]
         def _getCwt(data):
+            
             """
             data_ft = np.fft.fft(data, n=int(self.Datalen.value))
             N = INT(len(data_ft))
@@ -272,55 +269,62 @@ class CWT(Thread):
                 freqs = freqs[sel]
                 wave = wave[sel, :]
             """
-            wave, scales, freqs, coi, fft, fftfreqs = wavelet.cwt(data[:int(self.Datalen.value)],
+            
+            wave, scales, freqs, coi, fft, fftfreqs = wavelet.cwt(data,
                                                                self.CwtDT.value,
                                                                self.dj.value,
                                                                self.s0.value,
                                                                self.j.value,
                                                                self.wvlt)
             
-            Power = np.array(np.abs(wave)**2, dtype=DOUBLE)
-            return np.convolve(np.transpose(np.average(Power[21:32], axis = 0, weights=scales[21:32])),
-            #return np.convolve(np.transpose(np.mean(Power, axis = 0)),
-                                        self.gauss_filter, 'same')
+            Power = np.abs(wave)**2
+            tmean = np.transpose(np.mean(Power, axis = 0))#[21:32]
+            self.gauss_filter = signal.gaussian(len(tmean), std=10)
+            self.gauss_filter = self.gauss_filter/sum(self.gauss_filter)
+            #return tmean
+            return signal.convolve(tmean, self.gauss_filter, 'same')
+            #return Power
+            #return data
         try:
             while not self.Break:
-                oldCut = Cut
-                Cut = self.Cut
-                if oldCut.value == Cut.value-1:
-                    if self.Flow:
-                        self.Flow = False
-                        self.CwtDT = DOUBLE(np.diff(self.CwtT).mean())
-                        #self.CwtDT = DOUBLE(1/self.Frequency.value)
-                        self.s0 = FLOAT(2 * self.CwtDT.value / self.wvlt.flambda())
-                        self.j = INT(np.int(np.round(
-                            np.log2(self.Datalen.value * self.CwtDT.value /
-                                    self.s0.value) / self.dj.value)))
-                        self.sj_col = np.array((self.s0 * 2
-                                                ** (np.arange(0, self.j.value + 1)
-                                                    *self.dj.value))[:, np.newaxis], dtype=DOUBLE)
-                        startTime = datetime.now()
-                        CwtD = list(map(_getCwt, self.DataMV))
-                        endTime = datetime.now() 
-                        print("Сечение:", Cut.value, "Время выполнения расчета для всех каналов: "
-                              , endTime-startTime, '\n')
-                        if FlushCwt:
-                            WA = CwtD[self.ChannelToShow.value - 1]
-                            FlushCwt = False
-                        else:
-                            #WA = signal.correlate(WA, CwtD[self.ChannelToShow.value - 1], mode='same')
-                            #self.Break = True
-                            #WA = np.concatenate((WA, CwtD[self.ChannelToShow.value - 1]), axis = 0)
-                            WA = np.append(WA, CwtD[self.ChannelToShow.value - 1], axis = 0)
+                if self.Flow:
+                    self.Flow = False
+                        
+                    self.CwtDT = DOUBLE(np.diff(self.CwtT[-(int(self.Datalen.value)):,]).mean())
+                    #self.CwtDT = DOUBLE(1/self.Frequency.value)
+                    self.s0 = FLOAT(2 * self.CwtDT.value / self.wvlt.flambda())
+                    self.j = INT(np.int(np.round(
+                        np.log2(self.Datalen.value * self.CwtDT.value /
+                                self.s0.value) / self.dj.value)))
+                    #self.sj_col = np.array((self.s0 * 2 ** (np.arange(0, self.j.value + 1)*self.dj.value))[:, np.newaxis], dtype=DOUBLE)
+                    
+                    startTime = datetime.now()
+                    self.DataOP = list(map(_OPret, self.DataMV))
+                    #CwtD = pool.map(_getCwt, self.DataOP)
+                    CwtD = list(map(_getCwt, self.DataOP))
+                    endTime = datetime.now() 
+                    print("Сечение:", self.Cut.value, "Время выполнения расчета для всех каналов: "
+                          , endTime-startTime, '\n')
+                    if FlushCwt:
+                        WA = CwtD[self.ChannelToShow.value - 1]
+                        FlushCwt = False
+                    else:
+                        #WA = signal.correlate(WA, CwtD[self.ChannelToShow.value - 1], mode='same')
+                        #self.Break = True
+                        #WA = np.concatenate((WA, CwtD[self.ChannelToShow.value - 1]), axis = 0)
+                        WA = np.append(WA, CwtD[self.ChannelToShow.value - 1], axis = 0)
                 else:
                     continue
         finally:
             #WA = np.convolve(np.transpose(np.mean(WA, axis = 0)), GAUSS_FILTER, 'same')
+            #pool.close()
+            #pool.join()
             print('\n---------------------------------------------------------------\nSaving!\n')
             #WA = np.convolve(WA, self.gauss_filter, 'same')
-            plt.plot(WA, linewidth=0.2)
+            plt.plot(self.DataMV[self.ChannelToShow.value - 1], linewidth=0.4)
             #np.savetxt('bio.csv', WA, delimiter=",", fmt='%.10f')
             #plt.matshow(WA)
+            plt.plot(WA, linewidth=0.2)
             plt.savefig('bio.svg')
             print('Saved!\n')
 
@@ -345,12 +349,11 @@ def main():
     global EST_WAVELET
     global DJ
     #
-    global GAUSS_FILTER
     
     POSITION = Int64Size*3
     Freq = readMem(INT64, True)
-    ConcatSize = Freq*1
-    CwtFreq = Freq/10
+    ConcatSize = int(Freq*0.25)
+    CwtFreq = int(Freq/4)
     #CwtFreq = ConcatSize
     #ConcatSize = CwtFreq
     print(Freq)
@@ -376,61 +379,51 @@ def main():
     FlushMVData = True
     Flow = False
     ConcatStart = False
-    GAUSS_FILTER = signal.gaussian(CwtFreq, std=10)
-    GAUSS_FILTER = GAUSS_FILTER/sum(GAUSS_FILTER)
     try:
+        setpriority(priority=5)
         thread = CWT(EST_WAVELET, ConcatSize,
-                     INT64(Freq), INT64(Channels), INT(CHANNELTOSHOW), FLOAT(DJ),
-                     np.array(GAUSS_FILTER, dtype=FLOAT))
+                     INT64(Freq), INT64(Channels), INT(CHANNELTOSHOW), FLOAT(DJ))
         thread.daemon = True
         thread.start()
+        lock = RLock()
+        #pool = ThreadPool()
+        tmpcnt = 0
         while True:
             oldCut = Cut
+            POSITION = Int64Size*2
+            Cut = INT64(readMem(INT64, False, bytesout=True))
+            thread.Cut = Cut
+            lock.acquire()
             if not Flow:
                 CwtCut = Cut
                 ConcatCut = Cut
-                POSITION = Int64Size*2
-                Cut = INT64(readMem(INT64, False, bytesout=True))
-            else:
-                POSITION = Int64Size*2
-                Cut = INT64(readMem(INT64, False, bytesout=True))
-                POSITION = (((Int64Size*5 + IntegerSize*ExpectedChannels*2 +
-                              NameExpectedLength*AnsiCharSize) + 
-                       ((DateTimeSize + Int64Size + SingleSize*ExpectedChannels)
-                        *(divmod(Cut.value, MaxData)[1])))) + DateTimeSize
-                Cut = INT64(readMem(INT64, False, bytesout=True))
-                thread.Cut = Cut
             
             if oldCut.value == Cut.value-1:
+                tmpcnt += 1
                 if not Flow:
                     Flow = True
                     print("Job started...\n")
-                    POSITION = ((Int64Size*5 + IntegerSize*ExpectedChannels*2
-                                 + NameExpectedLength*AnsiCharSize) + 
-                       ((DateTimeSize + Int64Size + SingleSize*ExpectedChannels)
-                        *(divmod(Cut.value, MaxData)[1])))
-                else:
-                    POSITION = (POSITION-DateTimeSize)
                 
                 if Cut.value-ConcatCut.value > ConcatSize and not ConcatStart:
                     ConcatStart = True
+                    #tmpcnt = ConcatSize
                 
-                if Cut.value-CwtCut.value > CwtFreq and ConcatStart:
-                    CwtCut = Cut
-                    thread.Flow = True
+                POSITION = ((Int64Size*5 + IntegerSize*ExpectedChannels*2 +
+                             NameExpectedLength*AnsiCharSize) +
+                            ((DateTimeSize + Int64Size + SingleSize*ExpectedChannels)*
+                             (divmod(Cut.value, MaxData)[1])))
 
                 AstrTime = readMem(DOUBLE, True, datetimedouble=True)
                 POSITION = (POSITION+Int64Size)
                 #MV Data concaternation
                 if FlushMVData:
+                    #thread.DataMV = pool.map(createMVData, thread.DataMV)
                     thread.DataMV = list(map(createMVData, thread.DataMV))
                     FlushMVData = False
                 else:
+                    #thread.DataMV = pool.map(getMVData, thread.DataMV)
                     thread.DataMV = list(map(getMVData, thread.DataMV))
-                    #
-                    if ConcatStart:
-                        thread.DataMV = list(map(deleteData, thread.DataMV))
-                    #
+
                 # Datetime concaternation
                 if FlushTime:
                     thread.CwtT = np.ndarray((1,), buffer=AstrTime, dtype=DOUBLE, order='C')
@@ -441,12 +434,16 @@ def main():
                                                              buffer=AstrTime,
                                                              dtype=DOUBLE, order='C')),
                                                  axis = 0)
-                    #
-                    if ConcatStart:
-                        thread.CwtT = np.delete(thread.CwtT, 0, axis = 0)
-                    #
 
                 #"""
+                
+                if Cut.value-CwtCut.value >= CwtFreq and ConcatStart:
+                    CwtCut = Cut
+                    thread.Datalen = FLOAT(tmpcnt)
+                    print(tmpcnt)
+                    thread.Flow = True
+                    tmpcnt = 0
+                    lock.release()
 
             else:
                 continue
@@ -456,8 +453,8 @@ def main():
         kernel32.UnmapViewOfFile(MEMORY_BUFFER)
         thread.Break = True
         thread.join(timeout=20)
-        #thread.daemon = False
-        #WA = np.convolve(np.transpose(np.mean(WA, axis = 0)), GAUSS_FILTER, 'same')
+        #pool.close()
+        #pool.join()
         print('\n---------------------------------------------------------------\nJob done!\n')
 
 if __name__ == '__main__':
