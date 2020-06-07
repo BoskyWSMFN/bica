@@ -1,13 +1,5 @@
 
-biosignal_realtime_cwt_analysis_py/bio.csv
-biosignal_realtime_cwt_analysis_py/bio.svg
-brainsysFileMem2020301/BrWrite.ini
-brainsysFileMem2020301/hsread.str
-brainsysFileMem2020301/BrWrite.ini
-brainsysFileMem2020301/hsread.str
-brainsysFileMem2020301/Brainsys.ini
-biosignal_realtime_cwt_analysis_py/tmp.py
-brainsysFileMem2020301/hsread.str
-biosignal_realtime_cwt_analysis_py/tmp2.py
-brainsysFileMem2020301/hsread.str
-brainsysFileMem2020301/Brainsys.ini
+biosignal_realtime_cwt_analysis_py/__pycache__/
+*.svg
+*.csv
+
