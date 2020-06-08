@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import division
-import ctypes as C
 from ctypes import (c_void_p,c_size_t,c_wchar_p,c_char_p,c_wchar,c_char,c_int64,
-                    c_int,c_float,c_double,c_longdouble,c_ulong,c_bool,sizeof,
+                    c_int,c_float,c_double,c_longdouble,c_ulong,sizeof,
                     POINTER,WinDLL,Structure)
 from ctypes.wintypes import (BOOL,LPCVOID,LPVOID)
 from datetime import (datetime,timedelta)
@@ -10,6 +9,7 @@ from multiprocessing import (Process,Queue,Event,Lock)
 from scipy.signal import (gaussian,convolve)
 from pycwt.wavelet import (cwt,Morlet)
 from matplotlib import pyplot as plt
+import ctypes as C
 import numpy as np
 import changePriority as cpr
 import queue,socket,time,sys
@@ -70,7 +70,6 @@ Data model code in Delphi:
 """
 TAGNAME = LPCWSTR('NeuroKMData') #Ожидаемое наименование файла в общей памяти
 ###---------------------------------------------------------------------------
-CHANNELTOSHOW = 1
 EST_WAVELET = Morlet(6.) # Morlet wavelet with ω0=6
 DJ = 1/12 # Twelve sub-octaves per octaves
 DB = 4 # Frequency diveded by DB
@@ -122,54 +121,37 @@ class MESSAGE_PAYLOAD(Structure):
                 ("Data_Length", INT64),
                 ("Timestamp", DOUBLE),
                 ("Time_Interval", FLOAT),
-                ("Channel_1", POINTER(DOUBLE)),
-                ("Channel_2", POINTER(DOUBLE)),
-                ("Channel_3", POINTER(DOUBLE)),
-                ("Channel_4", POINTER(DOUBLE)),
-                ("Channel_5", POINTER(DOUBLE)),
-                ("Channel_6", POINTER(DOUBLE)),
-                ("Channel_7", POINTER(DOUBLE)),
-                ("Channel_8", POINTER(DOUBLE)),
-                ("Channel_9", POINTER(DOUBLE)),
-                ("Channel_10", POINTER(DOUBLE)),
-                ("Channel_11", POINTER(DOUBLE)),
-                ("Channel_12", POINTER(DOUBLE)),
-                ("Channel_13", POINTER(DOUBLE)),
-                ("Channel_14", POINTER(DOUBLE)),
-                ("Channel_15", POINTER(DOUBLE)),
-                ("Channel_16", POINTER(DOUBLE)),
-                ("Channel_17", POINTER(DOUBLE)),
-                ("Channel_18", POINTER(DOUBLE)),
-                ("Channel_19", POINTER(DOUBLE)),
-                ("Channel_20", POINTER(DOUBLE)),
-                ("Channel_21", POINTER(DOUBLE)),
-                ("Channel_22", POINTER(DOUBLE)))
+                ("Channel_1", DOUBLE*250),
+                ("Channel_2", DOUBLE*250),
+                ("Channel_3", DOUBLE*250),
+                ("Channel_4", DOUBLE*250),
+                ("Channel_5", DOUBLE*250),
+                ("Channel_6", DOUBLE*250),
+                ("Channel_7", DOUBLE*250),
+                ("Channel_8", DOUBLE*250),
+                ("Channel_9", DOUBLE*250),
+                ("Channel_10", DOUBLE*250),
+                ("Channel_11", DOUBLE*250),
+                ("Channel_12", DOUBLE*250),
+                ("Channel_13", DOUBLE*250),
+                ("Channel_14", DOUBLE*250),
+                ("Channel_15", DOUBLE*250),
+                ("Channel_16", DOUBLE*250),
+                ("Channel_17", DOUBLE*250),
+                ("Channel_18", DOUBLE*250),
+                ("Channel_19", DOUBLE*250),
+                ("Channel_20", DOUBLE*250),
+                ("Channel_21", DOUBLE*250),
+                ("Channel_22", DOUBLE*250))
     
     def __init__(self,*args,**kwargs):
         super(MESSAGE_PAYLOAD,self).__init__(*args,**kwargs)
-        self.nChannel = [np.array([], dtype=DOUBLE, order='C')]*ExpectedChannels
-        self.Channel_1 = np.ctypeslib.as_ctypes(self.nChannel[0])
-        self.Channel_2 = np.ctypeslib.as_ctypes(self.nChannel[1])
-        self.Channel_3 = np.ctypeslib.as_ctypes(self.nChannel[2])
-        self.Channel_4 = np.ctypeslib.as_ctypes(self.nChannel[3])
-        self.Channel_5 = np.ctypeslib.as_ctypes(self.nChannel[4])
-        self.Channel_6 = np.ctypeslib.as_ctypes(self.nChannel[5])
-        self.Channel_7 = np.ctypeslib.as_ctypes(self.nChannel[6])
-        self.Channel_8 = np.ctypeslib.as_ctypes(self.nChannel[7])
-        self.Channel_9 = np.ctypeslib.as_ctypes(self.nChannel[8])
-        self.Channel_10 = np.ctypeslib.as_ctypes(self.nChannel[9])
-        self.Channel_11 = np.ctypeslib.as_ctypes(self.nChannel[10])
-        self.Channel_12 = np.ctypeslib.as_ctypes(self.nChannel[11])
-        self.Channel_13 = np.ctypeslib.as_ctypes(self.nChannel[12])
-        self.Channel_14 = np.ctypeslib.as_ctypes(self.nChannel[13])
-        self.Channel_15 = np.ctypeslib.as_ctypes(self.nChannel[14])
-        self.Channel_16 = np.ctypeslib.as_ctypes(self.nChannel[15])
-        self.Channel_17 = np.ctypeslib.as_ctypes(self.nChannel[16])
-        self.Channel_18 = np.ctypeslib.as_ctypes(self.nChannel[17])
-        self.Channel_19 = np.ctypeslib.as_ctypes(self.nChannel[18])
-        self.Channel_20 = np.ctypeslib.as_ctypes(self.nChannel[19])
-        self.Channel_21 = np.ctypeslib.as_ctypes(self.nChannel[20])
-        self.Channel_22 = np.ctypeslib.as_ctypes(self.nChannel[21])
+        self.nChannel = [np.array([0]*250, dtype=DOUBLE, order='C')]*ExpectedChannels
+        i = 0
+        for f in self._fields_:
+            if f[1] == DOUBLE*250:
+                setattr(self,f[0],np.ctypeslib.as_ctypes(self.nChannel[i]))
+                i += 1
 
 class DATACWT_PAYLOAD(object):
     
@@ -209,7 +191,7 @@ class SECURITY_ATTRIBUTES(Structure):
     @descriptor.setter
     def descriptor(self, value):
         self._descriptor = value
-        self.lpSecurityDescriptor = addressof(value)
+        self.lpSecurityDescriptor = C.addressof(value)
 LPSECURITY_ATTRIBUTES = POINTER(SECURITY_ATTRIBUTES)
 
 class MEMORY_BASIC_INFORMATION(Structure):
@@ -285,7 +267,9 @@ def socket_client(DataS, ShutDown, Connection, LockQ):
     
     PreMessage = MESSAGE_PRELOAD()
     Message = MESSAGE_PAYLOAD()
-    
+    cpr.SetPriority(1)
+    i=0
+    ch=0
     try:
         while not ShutDown.is_set():
             
@@ -300,10 +284,26 @@ def socket_client(DataS, ShutDown, Connection, LockQ):
             Message.Cut = InputMessage.Cut
             Message.Timestamp = InputMessage.Timestamp
             Message.Time_Interval = InputMessage.Time_Interval
-            Message.nChannel = InputMessage.nChannel
-            Connection.sendall(premessage(PreMessage, Message.Cut, sizeof(Message)))
-            Message.Timestamp = DOUBLE(datetime.utcnow().timestamp())
-            Connection.sendall(Message)# Отправка преобразованных данных через протокол Sockets
+            for n in InputMessage.nChannel:
+                ch+=1
+            for f in Message._fields_:
+                if i == ch:
+                    break
+                if f[1] == DOUBLE*250:
+                    setattr(Message,f[0],np.ctypeslib.as_ctypes(InputMessage.nChannel[i]))
+                    i += 1
+            #for nc in InputMessage.nChannel:
+            #    Message.nChannel[i] = nc
+            #    i+=1
+            i=0
+            ch=0
+            try:
+                Connection.sendall(premessage(PreMessage, Message.Cut, sizeof(Message)))
+                Message.Timestamp = DOUBLE(datetime.utcnow().timestamp())
+                Connection.sendall(Message)# Отправка преобразованных данных через протокол Sockets
+            except socket.error as e:
+                print(e)
+                ShutDown.set()
     finally:
         Connection.close()
 
@@ -355,12 +355,13 @@ def analysis(DataQ, DataS, ShutDown, LockQ, Fltr):
             gauss_filter = gaussian(len(tmean), std=10)
             gauss_filter = gauss_filter/np.sum(gauss_filter) # Создание сглаживающей гаусианны с длиной, равной размеру окна, для дальнейшей свертки.
             buff = convolve(tmean, gauss_filter, 'same') # Свертка с фильтром
-            return (buff.astype(dtype=DOUBLE, order='C', copy=False))[125:datalen-125]
+            return (buff.astype(dtype=DOUBLE, order='C', copy=False))[150:datalen-150]
         
         return list(map(_cwt, data))
     
     Message = DATACWT_PAYLOAD()
-    
+    DataPayload = None
+    cpr.SetPriority(1)
     WA = list()
     CwtD = [np.array([], dtype=DOUBLE, order='C')]*ExpectedChannels
     CwtCut = 1
@@ -379,7 +380,7 @@ def analysis(DataQ, DataS, ShutDown, LockQ, Fltr):
             
             # Отправка данных на анализ и преобразование
             CwtDT = np.diff(DataPayload.nTimestamp).mean() # Вычисление интервала между точками
-            CwtD = _getCwt(DataPayload.nChannel, CwtDT, DataPayload.Data_Length.value+250)
+            CwtD = _getCwt(DataPayload.nChannel, CwtDT, DataPayload.Data_Length.value+300)
             #
                 
             # Отправка данных в очередь на формирование пакета Sockets
@@ -400,8 +401,9 @@ def analysis(DataQ, DataS, ShutDown, LockQ, Fltr):
             #
             
     finally:
-        DataPayload.nWA = WA
-        DataQ.put(DataPayload, PUTBLOCK, PUTTIMEOUT)
+        if DataPayload != None:
+            DataPayload.nWA = WA
+            DataQ.put(DataPayload, PUTBLOCK, PUTTIMEOUT)
 
 #-----------------------------------------------------------------------------
         
@@ -483,8 +485,10 @@ def file_mapping(sock, DataQ, DataS, ShutDown, LockQ):
             time.sleep(5)
             continue
     tc = TChannel()
-    pos = Int64Size*3
-    Freq, pos = readMem(mbuf, pos, INT64, True) # Частота оцифровки
+    while True:
+            Freq, pos = readMem(mbuf, Int64Size*3, INT64, True) # Частота оцифровки
+            if Freq:
+                break
     CwtFreq = int(Freq/DB)# Частота преобразования и отправки данных и длина окна
     print('\nЧастота оцифровки: ', Freq, 'Гц')
     Channels, pos = readMem(mbuf, pos, INT64, True) # Фактическое количество используемых каналов
@@ -496,7 +500,7 @@ def file_mapping(sock, DataQ, DataS, ShutDown, LockQ):
     for i in range(0, Channels):
         LeadsAct[i], pos = readMem(mbuf, pos, INT, True)
         cp = pos
-        POSITION = (cp + IntegerSize*(ExpectedChannels - 1))
+        pos = (cp + IntegerSize*(ExpectedChannels - 1))
         LeadsPas[i], pos = readMem(mbuf, pos, INT, False)
         pos = cp
         Leads[i] = (tc.leads[LeadsAct[i]],tc.leads[LeadsPas[i]])
@@ -512,56 +516,80 @@ def file_mapping(sock, DataQ, DataS, ShutDown, LockQ):
     FlushMVData = True
     Flow = False
     cpr.SetPriority(5)
+    slpt = 1/Freq/1000
     try:
         while not ShutDown.is_set():
-            oldCut = Cut
-            with LockQ:
-                Cut, pos = readMem(mbuf, Int64Size*2, INT64, False)
             if not Flow:
-                CwtCut = Cut + 300
-            
-            if oldCut == Cut-1:
-                Datalen += 1
-                if not Flow:
+                oldCut = Cut
+                with LockQ:
+                    Cut = readMem(mbuf, Int64Size*2, INT64, False, posret=False)
+                acCut = Cut
+                CwtCut = Cut + 350
+                if oldCut == Cut-1:
                     Flow = True
                     print("Анализ...\n")
-                with LockQ:
-                    AstrTime, pos = readMem(mbuf, prepos1+prepos2*(divmod(Cut, MaxData)[1]),
-                                            DOUBLE, True, bytesout=True) # Чтение момента регистрации сигналов из общей памяти
-                
-                # Чтение данных из общей памяти и конкатенация биосигнала в мкВ в массив типа Float
-                if FlushMVData:
-                    FlushMVData = False
-                with LockQ:
-                    DataMV, pos = _getMVData(mbuf, pos+Int64Size, DataMV, FlushMVData)
-                #
-
-                # Конкатенация времени в массив типа Double
-                if FlushTime:
-                    CwtT = np.ndarray((1,), buffer=AstrTime, dtype=DOUBLE, order='C')
-                    FlushTime = False
                 else:
-                    CwtT = np.concatenate((CwtT,
-                                                  np.ndarray((1,),
-                                                             buffer=AstrTime,
-                                                             dtype=DOUBLE, order='C')),
-                                                 axis = 0)
-
-                #
-                
-                # Отправка массива данных в очередь для дальнейшей обработки с окном, равным CwtFreq
-                if Cut-CwtCut >= CwtFreq:
-                    if Datalen > CwtFreq:
-                        Datalen = CwtFreq
-                    CwtCut = Cut
-                    DataPayload.Cut = INT64(Cut)
-                    DataPayload.Data_Length = INT64(Datalen)
-                    DataPayload.nTimestamp = CwtT[-(Datalen+250):,]
-                    DataPayload.nChannel = _OPret(DataMV, Datalen+250)
-                    DataQ.put(DataPayload, PUTBLOCK, PUTTIMEOUT)
-                    print('\nРазмер окна: ', Datalen)
+                    time.sleep(slpt)
+                    continue
+            else:
+                acCut = readMem(mbuf, Int64Size*2, INT64, False, posret=False)
+                if acCut < oldCut:
+                    Flow = False
                     Datalen = 0
-                #
+                    continue
+            """
+            with LockQ:
+                mvCut, pos = readMem(mbuf,
+                                     Int64Size+(prepos1+prepos2*(divmod(Cut, MaxData)[1])),
+                                     INT64, False)
+            """
+            if acCut > Cut:
+                Cut += 1
+            else:
+                time.sleep(slpt)
+                continue
+            
+            Datalen += 1
+            
+            # Чтение момента регистрации сигналов из общей памяти
+            with LockQ:
+                pos = prepos1+prepos2*(divmod(Cut, MaxData)[1])
+                AstrTime, pos = readMem(mbuf, pos, DOUBLE, True, bytesout=True)
+            #
+            
+            # Чтение данных из общей памяти и конкатенация биосигнала в мкВ в массив типа Float
+            if FlushMVData:
+                FlushMVData = False
+            with LockQ:
+                DataMV, pos = _getMVData(mbuf, pos+Int64Size, DataMV, FlushMVData)
+            #
+            
+            # Конкатенация времени в массив типа Double
+            if FlushTime:
+                CwtT = np.ndarray((1,), buffer=AstrTime, dtype=DOUBLE, order='C')
+                FlushTime = False
+            else:
+                CwtT = np.concatenate((CwtT,
+                                              np.ndarray((1,),
+                                                         buffer=AstrTime,
+                                                         dtype=DOUBLE, order='C')),
+                                             axis = 0)
+            #
+            
+            # Отправка массива данных в очередь для дальнейшей обработки с окном, равным CwtFreq
+            if Cut-CwtCut >= CwtFreq:
+                if Datalen > CwtFreq:
+                    Datalen = CwtFreq
+                CwtCut = Cut
+                DataPayload.Cut = INT64(Cut)
+                DataPayload.Data_Length = INT64(Datalen)
+                DataPayload.nTimestamp = CwtT[-(Datalen+300):,]
+                DataPayload.nChannel = _OPret(DataMV, Datalen+300)
+                DataQ.put(DataPayload, PUTBLOCK, PUTTIMEOUT)
+                print('\nРазмер окна: ', Datalen)
+                print('Сечение: ', Cut)
+                Datalen = 0
+            #
     finally:
         print('\n---------------------------------------------------------------\nАнализ окончен.')
         kernel32.CloseHandle(hmap)
@@ -576,13 +604,13 @@ def file_mapping(sock, DataQ, DataS, ShutDown, LockQ):
             break
         WA = DataPayload.nWA
         print('Сохранение результатов!\n')
-        timed = list(map(datetime_fromdelphi, CwtT[175:175+len(WA[0])]))
+        timed = list(map(datetime_fromdelphi, CwtT[200:200+len(WA[0])]))
         times = np.array(list(map(_2sec,timed)))
         times = times-np.min(times)
         for i in range(Channels):
-            ar1 = (DataMV[i])[175:175+len(WA[i])]
+            ar1 = (DataMV[i])[200:200+len(WA[i])]
             ar2 = WA[i]
-            plt.plot(times, ar1, linewidth=0.4)
+            plt.plot(times, ar1, linewidth=0.1)
             plt.plot(times, ar2, linewidth=0.4)
             plt.title("Результат анализа по каналу "+str(i+1))
             plt.ylabel("Измеренные значения и мощность, мкВ")
@@ -662,19 +690,15 @@ if __name__ == '__main__':
         raise SystemExit()
     except (KeyboardInterrupt, SystemExit, EOFError):
         ShutDown.set()
-        time.sleep(2)
-        print('Работа окончена!')
-        time.sleep(3)
+        time.sleep(10)
     finally:
         DataQ.close()
         DataQ.join_thread()
         DataS.close()
         DataS.join_thread()
+        print('Работа окончена!')
         time.sleep(2)
         Filemapping.join(2)
         Analysis.join(2)
         SocketClient.join(2)
         sys.exit(0)
-    
-        
-    
