@@ -5,14 +5,18 @@ from ctypes import (c_void_p,c_size_t,c_wchar_p,c_char_p,c_wchar,c_char,c_int64,
                     POINTER,WinDLL,Structure)
 from ctypes.wintypes import (BOOL,LPCVOID,LPVOID)
 from datetime import (datetime,timedelta)
-from multiprocessing import (Process,Queue,Event,Lock)
+from multiprocessing import (Process,Queue,Pool,Event,Lock)
 from scipy.signal import (gaussian,convolve)
 from pycwt.wavelet import (cwt,Morlet)
 from matplotlib import pyplot as plt
+from functools import partial
+from tkinter import filedialog
 import ctypes as C
+import multiprocessing as mp
 import numpy as np
 import changePriority as cpr
-import queue,socket,time,sys
+import socketPayload as sp
+import queue,socket,time,sys,tkinter
 
 kernel32 = WinDLL('kernel32', use_last_error=True)
 ###
@@ -54,25 +58,29 @@ EXPECTED_SIZE        = (Int64Size*5 + IntegerSize*ExpectedChannels*2 +
                         (DateTimeSize + Int64Size + SingleSize*ExpectedChannels)*MaxData)
 """
 Data model code in Delphi:
-    nkdVersion: int64;
-    nkdReady : int64;
-    nkdCut: int64; // Actual cut. If equals -1 do nothing
-    nkdFrequency: int64;
-    nkdChannels:  int64; // ExpectedChannels
-    nkdLeadsAct: array[1..22] of integer; 
-    nkdLeadsPas: array[1..22] of integer;
-    nkdName: array[1..512] of AnsiChar;
-    nkdDATA_MV: array [0..nkMaxData] of
-     record
-      nkdAstrTime: tDateTime;
-      nkdCutCnt: int64; //Cut counter
-      nkdData:array[1..22] of single; // μV values
+nkdVersion  : int64; // Версия программы
+nkdReady    : int64; // Просто некое число (Автор)
+nkdCut      : int64; // Текущее сечение – счетчик записанных значений
+nkdFrequency: int64; // Частота оцифровки
+nkdChannels : int64; // Текущее количество каналов
+nkdLeadsAct : array[1..22] of integer; 
+nkdLeadsPas : array[1..22] of integer;
+nkdName     : array[1..512] of AnsiChar;
+nkdDATA_MV  : array[0..nkMaxData] of
+  record
+    nkdAstrTime: tDateTime;// Момент регистрации сигнала
+    nkdCutCnt  : int64;// Сечение (значения счетчика) для текущего значения данных
+    nkdData    : array[1..22] of single;// Данные по каналам в мкВ
+  end;
+
 """
 TAGNAME = LPCWSTR('NeuroKMData') #Ожидаемое наименование файла в общей памяти
 ###---------------------------------------------------------------------------
 EST_WAVELET = Morlet(6.) # Morlet wavelet with ω0=6
 DJ = 1/12 # Twelve sub-octaves per octaves
-DB = 4 # Frequency diveded by DB
+DB = 4 # Cwt Frequency = Frequency diveded by DB
+SMOOTH = 300
+SMOOTH_CUTRANGE = int(SMOOTH/2)
 ###---------------------------------------------------------------------------
 POSITION = 0
 GETBLOCK = True
@@ -112,46 +120,9 @@ class MESSAGE_PRELOAD(Structure):
                 ("Size", INT64))
 
 def premessage(st, cut, size):
-    st.Cut = INT64(cut)
+    st.Cut = cut
     st.Size = INT64(size)
     return st
-
-class MESSAGE_PAYLOAD(Structure):
-    _fields_ = (("Cut", INT64),
-                ("Data_Length", INT64),
-                ("Timestamp", DOUBLE),
-                ("Time_Interval", FLOAT),
-                ("Channel_1", DOUBLE*250),
-                ("Channel_2", DOUBLE*250),
-                ("Channel_3", DOUBLE*250),
-                ("Channel_4", DOUBLE*250),
-                ("Channel_5", DOUBLE*250),
-                ("Channel_6", DOUBLE*250),
-                ("Channel_7", DOUBLE*250),
-                ("Channel_8", DOUBLE*250),
-                ("Channel_9", DOUBLE*250),
-                ("Channel_10", DOUBLE*250),
-                ("Channel_11", DOUBLE*250),
-                ("Channel_12", DOUBLE*250),
-                ("Channel_13", DOUBLE*250),
-                ("Channel_14", DOUBLE*250),
-                ("Channel_15", DOUBLE*250),
-                ("Channel_16", DOUBLE*250),
-                ("Channel_17", DOUBLE*250),
-                ("Channel_18", DOUBLE*250),
-                ("Channel_19", DOUBLE*250),
-                ("Channel_20", DOUBLE*250),
-                ("Channel_21", DOUBLE*250),
-                ("Channel_22", DOUBLE*250))
-    
-    def __init__(self,*args,**kwargs):
-        super(MESSAGE_PAYLOAD,self).__init__(*args,**kwargs)
-        self.nChannel = [np.array([0]*250, dtype=DOUBLE, order='C')]*ExpectedChannels
-        i = 0
-        for f in self._fields_:
-            if f[1] == DOUBLE*250:
-                setattr(self,f[0],np.ctypeslib.as_ctypes(self.nChannel[i]))
-                i += 1
 
 class DATACWT_PAYLOAD(object):
     
@@ -265,9 +236,20 @@ def ar_elements(array):
 
 def socket_client(DataS, ShutDown, Connection, LockQ):
     
-    PreMessage = MESSAGE_PRELOAD()
-    Message = MESSAGE_PAYLOAD()
     cpr.SetPriority(1)
+    PreMessage = MESSAGE_PRELOAD()
+    while not ShutDown.is_set():
+            
+        try:
+            CwtFreq = DataS.get(GETBLOCK, GETTIMEOUT)
+            Message = sp.MessageReturn(CwtFreq.value*DB)
+            break
+        except queue.Empty:
+            continue
+        except EOFError:
+            ShutDown.set()
+            break
+    
     i=0
     ch=0
     try:
@@ -307,64 +289,74 @@ def socket_client(DataS, ShutDown, Connection, LockQ):
     finally:
         Connection.close()
 
+def mv2cwt(an_dt, an_s0, an_j, an_datalen, an_fltr, data):
+    
+    if ar_elements(data) == 0:
+        return
+            
+    """
+    datalen = len(data)
+    data_ft = np.fft.fft(data, n=int(datalen))
+    N = len(data_ft)
+    ftfreqs = 2 * np.pi * np.fft.fftfreq(N, dt)
+    psi_ft_bar = (self.sj_col * ftfreqs[1] * N) ** .5 *
+                  np.conjugate(EST_WAVELET.psi_ft(sj_col * ftfreqs))
+    wave = np.fft.ifft(data_ft * psi_ft_bar, axis=1, n=N)
+    sel = np.invert(np.isnan(wave).all(axis=1))
+    if np.any(sel):
+        sj = sj[sel]
+        freqs = freqs[sel]
+        wave = wave[sel, :]
+    """
+    wave, scales, freqs, coi, fft, fftfreqs = cwt(data,
+                                                  an_dt,
+                                                  DJ,
+                                                  an_s0,
+                                                  an_j,
+                                                  EST_WAVELET) # Выше указан алгоритм произведения анализа
+            
+    Power = np.abs(wave) # Мощность по модулю в квадрате
+    tmean = np.transpose(np.mean(Power[an_fltr[0]:an_fltr[1]], axis = 0)) # Обрезка по диапазону частот 24-43Гц, вычисление среднего и транспонирование получившейся 2D-матрицы, производится для совмещения "сырого" и обработанного сигнала по длительности.
+    gauss_filter = gaussian(len(tmean), std=10)
+    gauss_filter = gauss_filter/np.sum(gauss_filter) # Создание сглаживающей гаусианны с длиной, равной размеру окна, для дальнейшей свертки.
+    buff = convolve(tmean, gauss_filter, 'same') # Свертка с фильтром
+    return (buff.astype(dtype=DOUBLE, order='C',
+                        copy=False))[SMOOTH_CUTRANGE:an_datalen-SMOOTH_CUTRANGE]
+
 def analysis(DataQ, DataS, ShutDown, LockQ, Fltr):
     
-    def _WAconc(ar1,ar2):
-        i = 0
-        arret = ar1
-        for ar in ar2:
-            ar = np.concatenate((arret[i],ar), axis=0)
-            i += 1
-        return arret
-        
-    
-    def _getCwt(data, dt, datalen):
-        
+    def getCwt(pool, data, dt, datalen):
+
         s0 = 2 * dt / EST_WAVELET.flambda()
         j = np.int(np.round(np.log2((datalen) * dt / s0) / DJ))
-        
-        def _cwt(data):
-            
+        """
+        def mv2cwt(data):
             if ar_elements(data) == 0:
                 return
-            
-            """
-            datalen = len(data)
-            data_ft = np.fft.fft(data, n=int(datalen))
-            N = len(data_ft)
-            ftfreqs = 2 * np.pi * np.fft.fftfreq(N, dt)
-            psi_ft_bar = (self.sj_col * ftfreqs[1] * N) ** .5 *
-                                  np.conjugate(EST_WAVELET.psi_ft(sj_col * ftfreqs))
-            wave = np.fft.ifft(data_ft * psi_ft_bar, axis=1,
-                            n=N)
-            sel = np.invert(np.isnan(wave).all(axis=1))
-            if np.any(sel):
-                sj = sj[sel]
-                freqs = freqs[sel]
-                wave = wave[sel, :]
-            """
             wave, scales, freqs, coi, fft, fftfreqs = cwt(data,
                                                           dt,
                                                           DJ,
                                                           s0,
                                                           j,
                                                           EST_WAVELET) # Выше указан алгоритм произведения анализа
-            
             Power = np.abs(wave) # Мощность по модулю в квадрате
             tmean = np.transpose(np.mean(Power[Fltr[0]:Fltr[1]], axis = 0)) # Обрезка по диапазону частот 24-43Гц, вычисление среднего и транспонирование получившейся 2D-матрицы, производится для совмещения "сырого" и обработанного сигнала по длительности.
             gauss_filter = gaussian(len(tmean), std=10)
             gauss_filter = gauss_filter/np.sum(gauss_filter) # Создание сглаживающей гаусианны с длиной, равной размеру окна, для дальнейшей свертки.
             buff = convolve(tmean, gauss_filter, 'same') # Свертка с фильтром
             return (buff.astype(dtype=DOUBLE, order='C', copy=False))[150:datalen-150]
-        
-        return list(map(_cwt, data))
+        """
+        func = partial(mv2cwt, dt, s0, j, datalen, Fltr)
+        return pool.map(func, data)
     
     Message = DATACWT_PAYLOAD()
+    pool = Pool(processes=mp.cpu_count())
     DataPayload = None
     cpr.SetPriority(1)
     WA = list()
     CwtD = [np.array([], dtype=DOUBLE, order='C')]*ExpectedChannels
     CwtCut = 1
+    FirstTime = True
     try:
         FlushCwt = True
         while not ShutDown.is_set():
@@ -379,10 +371,19 @@ def analysis(DataQ, DataS, ShutDown, LockQ, Fltr):
             #
             
             # Отправка данных на анализ и преобразование
+            #start = datetime.now()
             CwtDT = np.diff(DataPayload.nTimestamp).mean() # Вычисление интервала между точками
-            CwtD = _getCwt(DataPayload.nChannel, CwtDT, DataPayload.Data_Length.value+300)
+            CwtD = getCwt(pool, DataPayload.nChannel, CwtDT,
+                          DataPayload.Data_Length.value+SMOOTH)
+            #print('Time spent '+str(datetime.now()-start))
             #
-                
+            
+            #
+            if FirstTime:
+                FirstTime = False
+                DataS.put(DataPayload.Data_Length, PUTBLOCK, PUTTIMEOUT)
+            #
+            
             # Отправка данных в очередь на формирование пакета Sockets
             Message.Cut = INT64(CwtCut)
             Message.Datalen = DataPayload.Data_Length
@@ -404,6 +405,8 @@ def analysis(DataQ, DataS, ShutDown, LockQ, Fltr):
         if DataPayload != None:
             DataPayload.nWA = WA
             DataQ.put(DataPayload, PUTBLOCK, PUTTIMEOUT)
+        pool.close()
+        pool.join()
 
 #-----------------------------------------------------------------------------
         
@@ -465,9 +468,9 @@ def file_mapping(sock, DataQ, DataS, ShutDown, LockQ):
         return list(map(_dmvmapret, data)), tpos
     
     def _OPret(data, datalen):
-        def _mapret(data):
+        def mapret(data):
             return data[-(datalen):,]
-        return list(map(_mapret, data)) # Выделение из общего массива считанных данных окна, равного CwtFreq
+        return list(map(mapret, data)) # Выделение из общего массива считанных данных окна, равного CwtFreq
     
     while True:
         try:
@@ -524,7 +527,7 @@ def file_mapping(sock, DataQ, DataS, ShutDown, LockQ):
                 with LockQ:
                     Cut = readMem(mbuf, Int64Size*2, INT64, False, posret=False)
                 acCut = Cut
-                CwtCut = Cut + 350
+                CwtCut = Cut + (SMOOTH+50)
                 if oldCut == Cut-1:
                     Flow = True
                     print("Анализ...\n")
@@ -583,11 +586,10 @@ def file_mapping(sock, DataQ, DataS, ShutDown, LockQ):
                 CwtCut = Cut
                 DataPayload.Cut = INT64(Cut)
                 DataPayload.Data_Length = INT64(Datalen)
-                DataPayload.nTimestamp = CwtT[-(Datalen+300):,]
-                DataPayload.nChannel = _OPret(DataMV, Datalen+300)
+                DataPayload.nTimestamp = CwtT[-(Datalen+SMOOTH):,]
+                DataPayload.nChannel = _OPret(DataMV, Datalen+SMOOTH)
                 DataQ.put(DataPayload, PUTBLOCK, PUTTIMEOUT)
-                print('\nРазмер окна: ', Datalen)
-                print('Сечение: ', Cut)
+                print('\nРазмер окна: '+str(Datalen)+'\nСечение: '+str(Cut))
                 Datalen = 0
             #
     finally:
@@ -604,11 +606,12 @@ def file_mapping(sock, DataQ, DataS, ShutDown, LockQ):
             break
         WA = DataPayload.nWA
         print('Сохранение результатов!\n')
-        timed = list(map(datetime_fromdelphi, CwtT[200:200+len(WA[0])]))
+        timed = list(map(datetime_fromdelphi,
+                         CwtT[(SMOOTH_CUTRANGE+50):(SMOOTH_CUTRANGE+50)+len(WA[0])]))
         times = np.array(list(map(_2sec,timed)))
         times = times-np.min(times)
         for i in range(Channels):
-            ar1 = (DataMV[i])[200:200+len(WA[i])]
+            ar1 = (DataMV[i])[(SMOOTH_CUTRANGE+50):(SMOOTH_CUTRANGE+50)+len(WA[i])]
             ar2 = WA[i]
             plt.plot(times, ar1, linewidth=0.1)
             plt.plot(times, ar2, linewidth=0.4)
@@ -625,8 +628,7 @@ def file_mapping(sock, DataQ, DataS, ShutDown, LockQ):
             print('Сохранено: Канал '+str(i+1)+'!\n')
             
 
-if __name__ == '__main__':
-    
+def main():
     
     SOCKET = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     while True:
@@ -680,7 +682,7 @@ if __name__ == '__main__':
     Analysis = Process(target=analysis, args=(DataQ, DataS, ShutDown, LockQ, flt,))
     SocketClient = Process(target=socket_client, args=(DataS, ShutDown, SOCKET, LockQ,))
     Filemapping.daemon = True
-    Analysis.daemon = True
+    #Analysis.daemon = True
     SocketClient.daemod = True
     Filemapping.start()
     Analysis.start()
@@ -702,3 +704,6 @@ if __name__ == '__main__':
         Analysis.join(2)
         SocketClient.join(2)
         sys.exit(0)
+
+if __name__ == '__main__':
+    main()

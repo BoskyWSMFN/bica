@@ -2,10 +2,12 @@
 from __future__ import division
 from ctypes import (Structure,POINTER,c_int64,c_float,c_double)
 from threading import Thread, Event
-import sys,time
+from tkinter import filedialog
+import sys,time,tkinter
 import numpy as np
 import socket as sck
 import ctypes as C
+import socketPayload as sp
 
 ###
 INT64                = c_int64
@@ -37,68 +39,13 @@ class MESSAGE_PRELOAD(Structure):
     _fields_ = (("Cut", INT64),
                 ("Size", INT64))
 
-class MESSAGE_PAYLOAD(Structure):
-    _fields_ = (("Cut", INT64),
-                ("Data_Length", INT64),
-                ("Timestamp", DOUBLE),
-                ("Time_Interval", FLOAT),
-                ("Channel_1", DOUBLE*250),
-                ("Channel_2", DOUBLE*250),
-                ("Channel_3", DOUBLE*250),
-                ("Channel_4", DOUBLE*250),
-                ("Channel_5", DOUBLE*250),
-                ("Channel_6", DOUBLE*250),
-                ("Channel_7", DOUBLE*250),
-                ("Channel_8", DOUBLE*250),
-                ("Channel_9", DOUBLE*250),
-                ("Channel_10", DOUBLE*250),
-                ("Channel_11", DOUBLE*250),
-                ("Channel_12", DOUBLE*250),
-                ("Channel_13", DOUBLE*250),
-                ("Channel_14", DOUBLE*250),
-                ("Channel_15", DOUBLE*250),
-                ("Channel_16", DOUBLE*250),
-                ("Channel_17", DOUBLE*250),
-                ("Channel_18", DOUBLE*250),
-                ("Channel_19", DOUBLE*250),
-                ("Channel_20", DOUBLE*250),
-                ("Channel_21", DOUBLE*250),
-                ("Channel_22", DOUBLE*250))
-    
-    def c2npcast(self, datalen, channels):
-        size = 1
-        shape=(datalen,)
-        i = 0
-        for s in shape:
-            size *= s
-        for f in self._fields_:
-            if i == channels:
-                break
-            if isinstance(f[1], POINTER(DOUBLE*250)):
-                dbuffer = (DOUBLE * size).from_address(C.addressof(getattr(self, f[0]).contents))
-                self.nChannel[i] = np.frombuffer(dbuffer, dtype=DOUBLE).reshape(shape)
-                i+=1
-            elif isinstance(f[1], DOUBLE*250):
-                self.nChannel[i] = np.ctypeslib.as_array(getattr(self, f[0]),shape)
-                i+=1
-    
-    def __init__(self,*args,**kwargs):
-        super(MESSAGE_PAYLOAD,self).__init__(*args,**kwargs)
-        self.nChannel = [np.array([0]*250, dtype=DOUBLE, order='C')]*ExpectedChannels
-        
-        i = 0
-        for f in self._fields_:
-            if f[1] == DOUBLE*250:
-                setattr(self,f[0],np.ctypeslib.as_ctypes(self.nChannel[i]))
-                i += 1
-
-def 2valence(x):
+def np2Valence(x):
     return valA*x+valB
 
-def 2arousal(x):
+def np2Arousal(x):
     return arousA*x+arousB
 
-def 2dominance(x):
+def np2Dominance(x):
     return dominA*x+dominB
 
 class SRV(Thread):
@@ -110,7 +57,8 @@ class SRV(Thread):
         self.scktmt = 0.1
         self.firstmes = FIRST_MESSAGE_PAYLOAD()
         self.premes = MESSAGE_PRELOAD()
-        self.mes = MESSAGE_PAYLOAD()
+        self.mes = None
+        self.nChannel = [np.array([0])]*ExpectedChannels
     
     def startup(self):
         #self.sock.setsockopt(sck.SOL_SOCKET, sck.SO_REUSEADDR, 1)
@@ -123,6 +71,21 @@ class SRV(Thread):
         if not done:
             time.sleep(1)
             self.sock.close()
+    
+    def c2npcast(self, datalen, channels):
+        size = 1
+        shape=(datalen,)
+        i = 0
+        arlen = int(self.firstmes.Frequency/int(self.firstmes.Frequency/
+                                             self.firstmes.Cwt_Frequency))
+        for s in shape:
+            size *= s
+        for f in self.mes._fields_:
+            if i == channels:
+                break
+            if f[1] == DOUBLE*arlen:
+                self.nChannel[i] = np.ctypeslib.as_array(getattr(self.mes, f[0]),shape)
+                i+=1
         
     def run(self):
         fm = True
@@ -133,7 +96,7 @@ class SRV(Thread):
                     connection, address = self.sock.accept()
                 except sck.timeout:
                     continue
-                print('Соединение: ', address)
+                print('\nСоединение: ', address)
                 break
                 
             while not self.shutdown_event.is_set():
@@ -142,18 +105,26 @@ class SRV(Thread):
                         connection.recv_into(self.firstmes, FirstMessageSize)
                     except sck.timeout:
                         continue
-                    print('\nЧастота оцифровки: ', self.firstmes.Frequency)
-                    print('Частота преобразования: ', self.firstmes.Cwt_Frequency)
+                    except sck.herror:
+                        self.shutdown()
+                        break
+                    print('\nЧастота оцифровки: ', self.firstmes.Frequency, ' Гц')
+                    print('Частота преобразования: ', int(self.firstmes.Frequency/self.firstmes.Cwt_Frequency), ' Гц')
                     print('Фактическое количество каналов: ', self.firstmes.Channels)
+                    self.mes = sp.MessageReturn(self.firstmes.Frequency)
                     fm = False
                 else:
                     try:
                         connection.recv_into(self.premes, PreMessageSize)
                         connection.recv_into(self.mes, self.premes.Size)
+                        self.c2npcast(self.firstmes.Cwt_Frequency,self.firstmes.Channels)
                     except sck.timeout:
                         continue
+                    except sck.herror:
+                        self.shutdown()
+                        break
                     print('\nСечение: ', self.mes.Cut)
-                    self.mes.c2npcast(self.firstmes.Cwt_Frequency,self.firstmes.Channels)
+                    print('Канал 1, первые 10 значений: ', (self.nChannel[0])[:10])
                     
             
         finally:
@@ -162,7 +133,7 @@ class SRV(Thread):
 
 
 
-if __name__ == '__main__':
+def main():
     while True:
         try:
             port = abs(int(input('Введите номер порта (целое положительное число, >1023 не требует привелегий): ')))
@@ -185,3 +156,6 @@ if __name__ == '__main__':
         print('Работа окончена!')
         thread.join(timeout=5)
         sys.exit(0)
+
+if __name__ == '__main__':
+    main()
