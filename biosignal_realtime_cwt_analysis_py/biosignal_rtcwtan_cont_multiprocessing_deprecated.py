@@ -10,13 +10,12 @@ from scipy.signal import (gaussian,convolve)
 from pycwt.wavelet import (cwt,Morlet)
 from matplotlib import pyplot as plt
 from functools import partial
-from tkinter import filedialog
 import ctypes as C
 import multiprocessing as mp
 import numpy as np
 import changePriority as cpr
 import socketPayload as sp
-import queue,socket,time,sys,tkinter
+import queue,socket,time,sys
 
 kernel32 = WinDLL('kernel32', use_last_error=True)
 ###
@@ -88,9 +87,8 @@ GETTIMEOUT = 0.05
 PUTBLOCK = False
 PUTTIMEOUT = None
 
-class TChannel(object):
+class TChannel:
     def __init__(self,*args,**kwargs):
-        super(TChannel,self).__init__(*args,**kwargs)
         self.leads = ['Nul','O2','O1','P4','P3','C4','C3','F4','F3','FP2','FP1',
                       'T6','T5','T4','T3','F8','F7','Pz','Cz','Fz','A1','A2',
                       'AA','Crd','Any','Me','Oz','Fpz','Av1','Av2','Sd','m1',
@@ -165,16 +163,6 @@ class SECURITY_ATTRIBUTES(Structure):
         self.lpSecurityDescriptor = C.addressof(value)
 LPSECURITY_ATTRIBUTES = POINTER(SECURITY_ATTRIBUTES)
 
-class MEMORY_BASIC_INFORMATION(Structure):
-    _fields_ = (('BaseAddress',       VOID_P),
-                ('AllocationBase',    VOID_P),
-                ('AllocationProtect', DWORD),
-                ('RegionSize',        SIZE_T),
-                ('State',             DWORD),
-                ('Protect',           DWORD),
-                ('Type',              DWORD))
-PMEMORY_BASIC_INFORMATION = POINTER(MEMORY_BASIC_INFORMATION)
-
 def errcheck_bool(result, func, args):
     if not result:
         raise C.WinError(C.get_last_error())
@@ -193,13 +181,6 @@ kernel32.CreateFileMappingW.argtypes = (
     DWORD, # _In_ dwFileOffsetHigh
     DWORD, # _In_ dwFileOffsetLow
     LPCWSTR) # _In_ lpName
-
-kernel32.VirtualQuery.errcheck = errcheck_bool
-kernel32.VirtualQuery.restype = SIZE_T
-kernel32.VirtualQuery.argtypes = (
-    LPCVOID,                   # _In_opt_ lpAddress
-    PMEMORY_BASIC_INFORMATION, # _Out_    lpBuffer
-    SIZE_T)                    # _In_     dwLength
 
 kernel32.OpenFileMappingW.errcheck = errcheck_bool
 kernel32.OpenFileMappingW.restype = VOID_P
@@ -223,8 +204,8 @@ kernel32.CloseHandle.argtypes = (VOID_P,)
 kernel32.UnmapViewOfFile.errcheck = errcheck_bool
 kernel32.UnmapViewOfFile.argtypes = (LPVOID,)
 
-RtlMoveMemory = kernel32.RtlMoveMemory
-RtlMoveMemory.argtypes = (
+kernel32.RtlMoveMemory.errcheck  = errcheck_bool
+kernel32.RtlMoveMemory.argtypes = (
     VOID_P,
     VOID_P,
     SIZE_T,)
@@ -243,6 +224,7 @@ def socket_client(DataS, ShutDown, Connection, LockQ):
         try:
             CwtFreq = DataS.get(GETBLOCK, GETTIMEOUT)
             Message = sp.MessageReturn(CwtFreq.value*DB)
+            ar_type = DOUBLE*CwtFreq.value
             break
         except queue.Empty:
             continue
@@ -271,7 +253,7 @@ def socket_client(DataS, ShutDown, Connection, LockQ):
             for f in Message._fields_:
                 if i == ch:
                     break
-                if f[1] == DOUBLE*250:
+                if f[1] == ar_type:
                     setattr(Message,f[0],np.ctypeslib.as_ctypes(InputMessage.nChannel[i]))
                     i += 1
             #for nc in InputMessage.nChannel:
@@ -298,8 +280,9 @@ def mv2cwt(an_dt, an_s0, an_j, an_datalen, an_fltr, data):
     datalen = len(data)
     data_ft = np.fft.fft(data, n=int(datalen))
     N = len(data_ft)
-    ftfreqs = 2 * np.pi * np.fft.fftfreq(N, dt)
-    psi_ft_bar = (self.sj_col * ftfreqs[1] * N) ** .5 *
+    ftfreqs = 2 * np.pi * np.fft.fftfreq(N, an_dt)
+    sj_col = (an_s0 * 2 ** (np.arange(0, an_j + 1)*DJ))[:, np.newaxis]
+    psi_ft_bar = (sj_col * ftfreqs[1] * N) ** .5 *
                   np.conjugate(EST_WAVELET.psi_ft(sj_col * ftfreqs))
     wave = np.fft.ifft(data_ft * psi_ft_bar, axis=1, n=N)
     sel = np.invert(np.isnan(wave).all(axis=1))
@@ -316,7 +299,7 @@ def mv2cwt(an_dt, an_s0, an_j, an_datalen, an_fltr, data):
                                                   EST_WAVELET) # Выше указан алгоритм произведения анализа
             
     Power = np.abs(wave) # Мощность по модулю в квадрате
-    tmean = np.transpose(np.mean(Power[an_fltr[0]:an_fltr[1]], axis = 0)) # Обрезка по диапазону частот 24-43Гц, вычисление среднего и транспонирование получившейся 2D-матрицы, производится для совмещения "сырого" и обработанного сигнала по длительности.
+    tmean = np.transpose(np.mean(Power[an_fltr[0]:an_fltr[1]], axis = 0)) # Обрезка по диапазону частот, вычисление среднего и транспонирование получившейся 2D-матрицы, производится для совмещения "сырого" и обработанного сигнала по длительности.
     gauss_filter = gaussian(len(tmean), std=10)
     gauss_filter = gauss_filter/np.sum(gauss_filter) # Создание сглаживающей гаусианны с длиной, равной размеру окна, для дальнейшей свертки.
     buff = convolve(tmean, gauss_filter, 'same') # Свертка с фильтром
@@ -329,28 +312,22 @@ def analysis(DataQ, DataS, ShutDown, LockQ, Fltr):
 
         s0 = 2 * dt / EST_WAVELET.flambda()
         j = np.int(np.round(np.log2((datalen) * dt / s0) / DJ))
-        """
-        def mv2cwt(data):
-            if ar_elements(data) == 0:
-                return
-            wave, scales, freqs, coi, fft, fftfreqs = cwt(data,
-                                                          dt,
-                                                          DJ,
-                                                          s0,
-                                                          j,
-                                                          EST_WAVELET) # Выше указан алгоритм произведения анализа
-            Power = np.abs(wave) # Мощность по модулю в квадрате
-            tmean = np.transpose(np.mean(Power[Fltr[0]:Fltr[1]], axis = 0)) # Обрезка по диапазону частот 24-43Гц, вычисление среднего и транспонирование получившейся 2D-матрицы, производится для совмещения "сырого" и обработанного сигнала по длительности.
-            gauss_filter = gaussian(len(tmean), std=10)
-            gauss_filter = gauss_filter/np.sum(gauss_filter) # Создание сглаживающей гаусианны с длиной, равной размеру окна, для дальнейшей свертки.
-            buff = convolve(tmean, gauss_filter, 'same') # Свертка с фильтром
-            return (buff.astype(dtype=DOUBLE, order='C', copy=False))[150:datalen-150]
-        """
         func = partial(mv2cwt, dt, s0, j, datalen, Fltr)
         return pool.map(func, data)
     
     Message = DATACWT_PAYLOAD()
-    pool = Pool(processes=mp.cpu_count())
+    while not ShutDown.is_set():
+        # Чтение данных из очереди
+        try:
+            Channels = DataQ.get(GETBLOCK, GETTIMEOUT)
+            break
+        except queue.Empty:
+            continue
+        except EOFError:
+            ShutDown.set()
+            break
+        #
+    pool = Pool(processes=Channels)
     DataPayload = None
     cpr.SetPriority(1)
     WA = list()
@@ -420,35 +397,32 @@ def file_mapping(sock, DataQ, DataS, ShutDown, LockQ):
     def datetime_fromdelphi(dvalue):
         return DELPHI_EPOCH + timedelta(days=dvalue)
 
-    def readMem(hmap, pos, bts, svpos, posret=True, bytesout=False, datetimedouble=False):
-        global POSITION
+    def readMem(mbuf, pos, bts, svpos, posret=True, bytesout=False, datetimedouble=False):
         size = sizeof(bts)
         bts_s = C.create_string_buffer(size)
         source = mbuf + pos
         length = SIZE_T(size)
-        RtlMoveMemory(bts_s, source, length)
-        bts_n = np.array(bts_s, order='C')
+        kernel32.RtlMoveMemory(bts_s, source, length)
         if svpos and posret:
             retpos = pos + size
         elif not svpos and posret:
             retpos = pos
         if bytesout:
             if posret:
-                return bts_n.view(dtype=bts), retpos
+                return np.array(bts_s, order='C').view(dtype=bts), retpos
             else:
-                return bts_n.view(dtype=bts)
+                return np.array(bts_s, order='C').view(dtype=bts)
         elif datetimedouble:
             if posret:
-                return np.array(datetime_fromdelphi(bts_n.view(dtype=bts)).value.timestamp(),
-                                dtype=bts), retpos
+                return (datetime_fromdelphi(C.cast(bts_s,POINTER(bts)).contents.value).timestamp(),
+                        retpos)
             else:
-                return np.array(datetime_fromdelphi(bts_n.view(dtype=bts)).value.timestamp(),
-                                dtype=bts)
+                return datetime_fromdelphi(C.cast(bts_s,POINTER(bts)).contents.value).timestamp()
         else:
             if posret:
-                return bts(bts_n.view(dtype=bts)).value, retpos
+                return C.cast(bts_s, POINTER(bts)).contents.value, retpos
             else:
-                return bts(bts_n.view(dtype=bts)).value
+                return C.cast(bts_s, POINTER(bts)).contents.value
     
     def _getMVData(mbuf, pos, data, create):
         tpos = pos
@@ -497,6 +471,7 @@ def file_mapping(sock, DataQ, DataS, ShutDown, LockQ):
     Channels, pos = readMem(mbuf, pos, INT64, True) # Фактическое количество используемых каналов
     print('Количество каналов: ', Channels)
     sock.sendall(first_message(FIRST_MESSAGE_PAYLOAD(), Freq, CwtFreq, Channels)) # Сообщение серверу с первоначальными данными
+    DataQ.put(Channels, PUTBLOCK, PUTTIMEOUT)
     LeadsAct = [0]*Channels
     LeadsPas = [0]*Channels
     Leads = [(0,0)]*Channels
@@ -624,7 +599,7 @@ def file_mapping(sock, DataQ, DataS, ShutDown, LockQ):
             ar = np.vstack((timed,ar1))
             ar = np.transpose(np.vstack((ar, ar2)))
             np.savetxt('Channel_'+str(i+1)+'_cwt.csv', ar,
-                       header='MV,CWT', delimiter=",", encoding='utf-8', fmt='%s')
+                       header='Time,MV,CWT', delimiter=",", encoding='utf-8', fmt='%s')
             print('Сохранено: Канал '+str(i+1)+'!\n')
             
 

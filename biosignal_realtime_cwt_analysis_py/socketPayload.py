@@ -1,10 +1,17 @@
 # -*- coding: utf-8 -*-
 from ctypes import (Structure,c_int64,c_float,c_double,POINTER)
+from appVar import *
 import ctypes as C
 
-INT64 = c_int64
-FLOAT = c_float
-DOUBLE = c_double
+class FIRST_MESSAGE_PAYLOAD(Structure):
+    _fields_ = (("Frequency", INT64),
+                ("Cwt_Frequency", INT64),
+                ("Channels", INT64),
+                ("Timestamp", DOUBLE))
+
+class MESSAGE_PRELOAD(Structure):
+    _fields_ = (("Cut", INT64),
+                ("Size", INT64))
 
 class MESSAGE_PAYLOAD_200Hz(Structure):
     _fields_ = (("Cut", INT64),

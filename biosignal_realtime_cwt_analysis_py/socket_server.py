@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import division
-from ctypes import (Structure,POINTER,c_int64,c_float,c_double)
+from ctypes import (c_int64,c_float,c_double)
 from threading import Thread, Event
-from tkinter import filedialog
-import sys,time,tkinter
+import sys,time
 import numpy as np
 import socket as sck
-import ctypes as C
 import socketPayload as sp
 
 ###
@@ -18,35 +16,6 @@ ExpectedChannels     = 22
 FirstMessageSize     = 32
 PreMessageSize       = 16
 ###
-"""
-Waiting for further experiments
-"""
-valA                 = 1
-valB                 = 0
-arousA               = 1
-arousB               = 0
-dominA               = 1
-dominB               = 0
-###
-
-class FIRST_MESSAGE_PAYLOAD(Structure):
-    _fields_ = (("Frequency", INT64),
-                ("Cwt_Frequency", INT64),
-                ("Channels", INT64),
-                ("Timestamp", DOUBLE))
-
-class MESSAGE_PRELOAD(Structure):
-    _fields_ = (("Cut", INT64),
-                ("Size", INT64))
-
-def np2Valence(x):
-    return valA*x+valB
-
-def np2Arousal(x):
-    return arousA*x+arousB
-
-def np2Dominance(x):
-    return dominA*x+dominB
 
 class SRV(Thread):
     def __init__(self, shutdown_event, port):
@@ -55,8 +24,8 @@ class SRV(Thread):
         self.shutdown_event = shutdown_event
         self.port = port
         self.scktmt = 0.1
-        self.firstmes = FIRST_MESSAGE_PAYLOAD()
-        self.premes = MESSAGE_PRELOAD()
+        self.firstmes = sp.FIRST_MESSAGE_PAYLOAD()
+        self.premes = sp.MESSAGE_PRELOAD()
         self.mes = None
         self.nChannel = [np.array([0])]*ExpectedChannels
     
