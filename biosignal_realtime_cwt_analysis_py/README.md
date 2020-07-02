@@ -402,4 +402,4 @@ p.join()
 
 ![Блок-схема алгоритма работы ПО](https://i.ibb.co/8DynYYy/im3.png)
 
-![Архитектура ПО](https://i.ibb.co/XDnZd6c/algo.png)
+![Архитектура ПО](https://i.ibb.co/tPqWY5z/im4.png)
