@@ -1,5 +1,7 @@
-
+.*
+!.gitignore
 biosignal_realtime_cwt_analysis_py/__pycache__/
 *.svg
 *.csv
+/venv/
 

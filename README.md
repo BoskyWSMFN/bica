@@ -3,7 +3,7 @@
 Приложение требует загрузки следующих модулей (App contains following packages):
 
 ```
-pip install numpy scipy pycwt matlotlib
+pip install numpy scipy pycwt matplotlib
 ```
 
 Для удобства можно использовать IDE Spyder из дистрибутива [Anaconda](https://www.anaconda.com/products/individual "Anaconda"), где эти модули уже загружены.
@@ -16,7 +16,7 @@ For convenience one may use IDE Spyder from [Anaconda-dist](https://www.anaconda
 2.	(console session 1 and 2)
     
     ```
-    cd ~/biosignal_realtime_cwt_analysis_py/,
+    cd ./biosignal_realtime_cwt_analysis_py/,
     ```
     
 3.  (console session 1)
