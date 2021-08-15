@@ -7,7 +7,7 @@ from datetime import datetime
 
 from pycwt.wavelet import Morlet
 
-###---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 FILE_MAP_COPY = 0x0001
 FILE_MAP_WRITE = 0x0002
 FILE_MAP_READ = 0x0004
@@ -25,7 +25,7 @@ DOUBLE = c_double
 # -----------------------------------------------------------------------------
 MAX_DWORD = DWORD(0xffffffff)  # From Delphi
 INVALID_HANDLE_VALUE = VOID_P(-1)
-DELPHI_EPOCH = datetime(1899, 12, 30)  # Appeared due to delphi epoch starts at 1899-12-30 00:00:00
+DELPHI_EPOCH = datetime(1899, 12, 30)  # Appeared due to delphi epoch start at 1899-12-30 00:00:00
 NAME_EXPECTED_LENGTH = 512  # Expected name size
 INT64_SIZE = sizeof(INT64)
 DATETIME_SIZE = sizeof(DOUBLE)
@@ -38,7 +38,7 @@ SA = None
 EXPECTED_SIZE = (INT64_SIZE * 5 + INTEGER_SIZE * EXPECTED_CHANNELS * 2 +
                  NAME_EXPECTED_LENGTH * ANSI_CHAR_SIZE +
                  (DATETIME_SIZE + INT64_SIZE + SINGLE_SIZE * EXPECTED_CHANNELS) * MaxData)
-TAGNAME = LPCWSTR('NeuroKMData')  # Ожидаемое наименование файла в общей памяти
+TAGNAME = LPCWSTR('NeuroKMData')  # Expected filename in shared memory
 """
 Data model code in Delphi:
 nkdVersion  : int64; // Версия программы
