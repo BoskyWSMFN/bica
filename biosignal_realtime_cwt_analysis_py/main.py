@@ -1,4 +1,6 @@
 import ctypes as c
+import logging
+import multiprocessing
 import socket
 import sys
 import time
@@ -10,6 +12,9 @@ import socketclient as scl
 
 
 def main():
+    loggermp = multiprocessing.get_logger()
+    loggermp.setLevel(logging.DEBUG)
+
     sock_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     while True:
         try:
@@ -81,26 +86,40 @@ def main():
     socket_client = Process(target=scl.socket_client, args=(data_s, shutdown_e, sock_client, lock_q,))
     file_mapping.daemon = True
     socket_client.daemod = True
-    file_mapping.start()
-    sig_analysis.start()
-    socket_client.start()
 
     try:
-        input('Для остановки нажмите Enter...')
+        file_mapping.start()
+        sig_analysis.start()
+        socket_client.start()
+
+        shutdown_e.wait()
+
         raise SystemExit()
+    except Exception as e:
+        print(e)
+        shutdown_e.set()
+        sys.exit(1)
     except (KeyboardInterrupt, SystemExit, EOFError):
         shutdown_e.set()
         time.sleep(10)
     finally:
-        data_q.close()
-        data_q.join_thread()
+        sock_client.shutdown(socket.SHUT_RDWR)
+        sock_client.close()
+
+        time.sleep(2)
+        while data_s.qsize() != 0:
+            data_s.get_nowait()
+        while data_q.qsize() != 0:
+            data_q.get_nowait()
+
         data_s.close()
         data_s.join_thread()
+        data_q.close()
+        data_q.join_thread()
         print('\nРабота окончена!')
-        time.sleep(2)
-        file_mapping.join(2)
-        sig_analysis.join(2)
-        socket_client.join(2)
+        file_mapping.join()
+        sig_analysis.join()
+        socket_client.join()
         sys.exit(0)
 
 

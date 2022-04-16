@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
+import ctypes as c
 import socket as sck
 import sys
 import time
+import traceback
 from ctypes import (c_int64, c_float, c_double)
 from threading import Thread, Event
 
@@ -22,7 +24,7 @@ PreMessageSize = 16
 ###
 
 class SRV(Thread):
-    def __init__(self, shutdown_event, port):
+    def __init__(self, shutdown_event, port: int):
         Thread.__init__(self)
         self.sock = sck.socket(sck.AF_INET, sck.SOCK_STREAM)
         self.shutdown_event = shutdown_event
@@ -35,7 +37,7 @@ class SRV(Thread):
 
     def startup(self):
         # self.sock.setsockopt(sck.SOL_SOCKET, sck.SO_REUSEADDR, 1)
-        self.sock.bind(('127.0.0.1', self.port))
+        self.sock.bind(('', self.port))
         self.sock.settimeout(self.scktmt)
         self.sock.listen(1)
 
@@ -43,6 +45,7 @@ class SRV(Thread):
         self.shutdown_event.set()
         if not done:
             time.sleep(1)
+            self.sock.shutdown(sck.SHUT_RDWR)
             self.sock.close()
 
     def c2npcast(self, datalen, channels):
@@ -53,7 +56,8 @@ class SRV(Thread):
                                                   self.firstmes.Cwt_Frequency))
         for s in shape:
             size *= s
-        for f in self.mes.fields_:
+        # noinspection PyProtectedMember
+        for f in self.mes._fields_:
             if i == channels:
                 break
             if f[1] == DOUBLE * arlen:
@@ -62,26 +66,43 @@ class SRV(Thread):
 
     def run(self):
         fm = True
+        old_cut = 0
+
+        while not self.shutdown_event.is_set():
+            try:
+                connection, address = self.sock.accept()
+            except sck.timeout:
+                continue
+            except KeyboardInterrupt:
+                self.shutdown_event.set()
+                self.sock.close()
+
+                return
+            except WindowsError as w:
+                print(w)
+                print(traceback.format_exc())
+                self.shutdown_event.set()
+                self.sock.close()
+
+                return
+
+            print('\nСоединение: ', address)
+
+            break
+
         try:
-            print('Ожидание соединения...')
-            while not self.shutdown_event.is_set():
-                try:
-                    connection, address = self.sock.accept()
-                except sck.timeout:
-                    continue
-
-                print('\nСоединение: ', address)
-
-                break
-
             while not self.shutdown_event.is_set():
                 if fm:
                     try:
                         # noinspection PyUnboundLocalVariable
                         connection.recv_into(self.firstmes, FirstMessageSize)
-                    except sck.timeout:
-                        continue
-                    except sck.herror:
+                    except sck.timeout as t:
+                        print(t)
+                        self.shutdown()
+
+                        break
+                    except sck.herror as e:
+                        print(e)
                         self.shutdown()
 
                         break
@@ -96,14 +117,23 @@ class SRV(Thread):
                         connection.recv_into(self.premes, PreMessageSize)
                         connection.recv_into(self.mes, self.premes.Size)
                         self.c2npcast(self.firstmes.Cwt_Frequency, self.firstmes.Channels)
-                    except sck.timeout:
-                        continue
-                    except sck.herror:
+                    except sck.timeout as t:
+                        print(t)
+                        self.shutdown()
+
+                        break
+                    except sck.herror as e:
+                        print(e)
                         self.shutdown()
 
                         break
 
-                    print('\nСечение: ', self.mes.cwt_cut)
+                    if self.mes.Cut <= old_cut:
+                        break
+
+                    old_cut = self.mes.Cut
+
+                    print('\nСечение: ', self.mes.Cut)
                     print('Канал 1, первые 10 значений: ', (self.nChannel[0])[:10])
         finally:
             self.shutdown(done=True)
@@ -113,8 +143,9 @@ def main():
     port = 1024
     while True:
         try:
-            port = abs(int(input('Введите номер порта (целое положительное число,'
-                                 '>1023 не требует привилегий): ')))
+            port = int(input('Введите номер порта (целое положительное число, >1023 не требует привилегий): '))
+            if port < 0 or port > 65535:
+                raise ValueError("Must be greater than zero!")
 
             break
         except ValueError:
@@ -124,17 +155,17 @@ def main():
     shutdown = Event()
     thread = SRV(shutdown, port)
     thread.daemon = True
-    thread.start()
     thread.startup()
+    thread.start()
+
     try:
-        input('Для остановки нажмите Enter...')
+        shutdown.wait()
         raise SystemExit()
     except (KeyboardInterrupt, SystemExit, EOFError):
         thread.shutdown()
-        time.sleep(2)
     finally:
         print('Работа окончена!')
-        thread.join(timeout=5)
+        thread.join()
         sys.exit(0)
 
 

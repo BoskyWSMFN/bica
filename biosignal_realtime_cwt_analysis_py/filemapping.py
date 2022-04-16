@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import queue
+import sys
 import time
 from datetime import timedelta
 
@@ -141,6 +142,7 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
     old_cut = cur_cut
     cwt_time = list()
     cwt_cut = cur_cut
+    e = None
 
     try:
         while not shutdown_e.is_set():
@@ -150,7 +152,7 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
                     cur_cut = read_mem(mem_buf, INT64_SIZE * 2, INT64, False, return_pos=False)
                 actual_cut = cur_cut
                 cwt_cut = cur_cut + (SMOOTH + 50)
-                if old_cut == cur_cut - 1:
+                if old_cut < cur_cut:
                     data_flow = True
                     print("Анализ...\n")
                 else:
@@ -207,11 +209,19 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
                 data_payload.mv_timestamp = cwt_time[-(data_len + SMOOTH):, ]
                 data_payload.mv_data = _frame_ret(data_mv, data_len + SMOOTH)
                 data_q.put(data_payload, PUTBLOCK, PUTTIMEOUT)
-                print('\nРазмер окна: ' + str(data_len) + '\nСечение: ' + str(cur_cut))
+                # print('\nРазмер окна: ' + str(data_len) + '\nСечение: ' + str(cur_cut))
                 data_len = 0
             #
+    except Exception as e:
+        print("Filemapping error: ", e)
+    except KeyboardInterrupt:
+        print("Filemapping: Keyboard interrupt!")
+        shutdown_e.set()
     finally:
         print('\n---------------------------------------------------------------\nАнализ окончен.')
+
+        shutdown_e.set()
+
         # noinspection PyUnboundLocalVariable
         CloseHandle(hmap)
         UnmapViewOfFile(mem_buf)
@@ -226,25 +236,37 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
             break
 
         analyzed = data_payload.analyzed_sent
-        print('Сохранение результатов!\n')
-        timed = list(map(datetime_fromdelphi,
-                         cwt_time[(SMOOTH_CUTRANGE + 50):(SMOOTH_CUTRANGE + 50) + len(analyzed[0])]))
-        times = np.array(list(map(_2sec, timed)))
-        times = times - np.min(times)
+        if len(analyzed) == 0:
+            print("Nothing to save on disk!")
 
-        for i in range(channels):
-            ar1 = (data_mv[i])[(SMOOTH_CUTRANGE + 50):(SMOOTH_CUTRANGE + 50) + len(analyzed[i])]
-            ar2 = analyzed[i]
-            plt.plot(times, ar1, linewidth=0.1)
-            plt.plot(times, ar2, linewidth=0.4)
-            plt.title("Результат анализа по каналу " + str(i + 1))
-            plt.ylabel("Измеренные значения и мощность, мкВ")
-            plt.xlabel("Длительность, сек")
-            plt.xticks()
-            plt.savefig('Channel_' + str(i + 1) + '_cwt.svg')
-            plt.clf()
-            ar = np.vstack((timed, ar1))
-            ar = np.transpose(np.vstack((ar, ar2)))
-            np.savetxt('Channel_' + str(i + 1) + '_cwt.csv', ar,
-                       header='Time,MV,CWT', delimiter=",", encoding='utf-8', fmt='%s')
-            print('Сохранено: Канал ' + str(i + 1) + '!\n')
+            return
+
+        try:
+            print('Сохранение результатов!\n')
+            timed = list(map(datetime_fromdelphi,
+                             cwt_time[(SMOOTH_CUTRANGE + 50):(SMOOTH_CUTRANGE + 50) + len(analyzed[0])]))
+            times = np.array(list(map(_2sec, timed)))
+            times = times - np.min(times)
+
+            for i in range(channels):
+                ar1 = (data_mv[i])[(SMOOTH_CUTRANGE + 50):(SMOOTH_CUTRANGE + 50) + len(analyzed[i])]
+                ar2 = analyzed[i]
+                plt.plot(times, ar1, linewidth=0.1)
+                plt.plot(times, ar2, linewidth=0.4)
+                plt.title("Результат анализа по каналу " + str(i + 1))
+                plt.ylabel("Измеренные значения и мощность, мкВ")
+                plt.xlabel("Длительность, сек")
+                plt.xticks()
+                plt.savefig('Channel_' + str(i + 1) + '_cwt.svg')
+                plt.clf()
+                ar = np.vstack((timed, ar1))
+                ar = np.transpose(np.vstack((ar, ar2)))
+                np.savetxt('Channel_' + str(i + 1) + '_cwt.csv', ar,
+                           header='Time,MV,CWT', delimiter=",", encoding='utf-8', fmt='%s')
+                print('Сохранено: Канал ' + str(i + 1) + '!\n')
+
+        except Exception as e:
+            print("Result saving error: ", e)
+        finally:
+            print("Filemapping: All done!")
+            sys.exit(0)

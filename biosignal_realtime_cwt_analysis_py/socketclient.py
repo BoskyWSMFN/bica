@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import queue
 import socket
+import sys
 
 import numpy as np
 
@@ -30,6 +31,11 @@ def socket_client(data_s, shutdown_e, connection, lock_q):
             break
         except queue.Empty:
             continue
+        except KeyboardInterrupt:
+            print("Keyboard interrupt!")
+            shutdown_e.set()
+
+            break
         except EOFError:
             shutdown_e.set()
 
@@ -55,7 +61,8 @@ def socket_client(data_s, shutdown_e, connection, lock_q):
 
             for _ in input_message.cwt_data:
                 ch += 1
-            for f in message.fields_:
+            # noinspection PyProtectedMember
+            for f in message._fields_:
                 if i == ch:
                     break
                 if f[1] == ar_type:
@@ -69,8 +76,18 @@ def socket_client(data_s, shutdown_e, connection, lock_q):
                 connection.sendall(get_premessage(pre_message, message.Cut, c.sizeof(message)))
                 message.Timestamp = DOUBLE(datetime.utcnow().timestamp())
                 connection.sendall(message)  # Отправка преобразованных данных через протокол Sockets
+            except KeyboardInterrupt:
+                print("Keyboard interrupt!")
+                shutdown_e.set()
             except socket.error as e:
                 print(e)
                 shutdown_e.set()
+    except KeyboardInterrupt:
+        print("Socket client: Keyboard interrupt!")
+        shutdown_e.set()
+    except Exception as e:
+        print("Socket client error: ", e)
+        shutdown_e.set()
     finally:
-        connection.close()
+        print("Socket client: All done!")
+        sys.exit(0)
