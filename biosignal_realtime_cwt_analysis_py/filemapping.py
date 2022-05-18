@@ -2,6 +2,7 @@
 import queue
 import sys
 import time
+import struct
 from datetime import timedelta
 
 import numpy as np
@@ -189,9 +190,12 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
             #
 
             # Конкатенация времени в массив типа Double
+            time_now = datetime.now()
+            time_now_bts = np.array(time_now)
+
             if flush_time:
                 cwt_time = np.ndarray((1,), buffer=astr_time, dtype=DOUBLE, order='C')
-                actual_time = np.ndarray((1,), buffer=datetime.now().timestamp(), dtype=DOUBLE, order='C')
+                actual_time = np.ndarray((1,), buffer=time_now_bts, dtype=datetime, order='C')
                 flush_time = False
             else:
                 cwt_time = np.concatenate((cwt_time,
@@ -201,8 +205,8 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
                                           axis=0)
                 actual_time = np.concatenate((actual_time,
                                               np.ndarray((1,),
-                                                         buffer=datetime.now().timestamp(),
-                                                         dtype=DOUBLE, order='C')),
+                                                         buffer=time_now_bts,
+                                                         dtype=datetime, order='C')),
                                              axis=0)
             #
 
@@ -214,7 +218,6 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
                 data_payload.mv_cut = INT64(cur_cut)
                 data_payload.mv_data_length = INT64(data_len)
                 data_payload.mv_timestamp = cwt_time[-(data_len + SMOOTH):, ]
-                data_payload.mv_timestamp = actual_time[-(data_len + SMOOTH):, ]
                 data_payload.mv_data = _frame_ret(data_mv, data_len + SMOOTH)
                 data_q.put(data_payload, PUTBLOCK, PUTTIMEOUT)
                 # print('\nРазмер окна: ' + str(data_len) + '\nСечение: ' + str(cur_cut))
@@ -246,6 +249,8 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
         analyzed = data_payload.analyzed_sent
         if len(analyzed) == 0:
             print("Nothing to save on disk!")
+            print("Filemapping: All done!")
+            sys.exit(0)
 
             return
 
@@ -255,7 +260,7 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
                              cwt_time[(SMOOTH_CUTRANGE + 50):(SMOOTH_CUTRANGE + 50) + len(analyzed[0])]))
             times = np.array(list(map(_2sec, timed)))
             times = times - np.min(times)
-            actual_timed = cwt_time[(SMOOTH_CUTRANGE + 50):(SMOOTH_CUTRANGE + 50) + len(analyzed[0])]
+            actual_timed = actual_time[(SMOOTH_CUTRANGE + 50):(SMOOTH_CUTRANGE + 50) + len(analyzed[0])]
 
             for i in range(channels):
                 ar1 = (data_mv[i])[(SMOOTH_CUTRANGE + 50):(SMOOTH_CUTRANGE + 50) + len(analyzed[i])]
@@ -272,7 +277,7 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
                 ar = np.vstack((ar, ar1))
                 ar = np.transpose(np.vstack((ar, ar2)))
                 np.savetxt('Channel_' + str(i + 1) + '_cwt.csv', ar,
-                           header='Time,MV,CWT', delimiter=",", encoding='utf-8', fmt='%s')
+                           header='Time,ActualTime,MV,CWT', delimiter=",", encoding='utf-8', fmt='%s')
                 print('Сохранено: Канал ' + str(i + 1) + '!\n')
 
         except Exception as e:
