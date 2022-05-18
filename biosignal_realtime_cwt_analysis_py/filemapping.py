@@ -141,6 +141,7 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
     sleep_duration = 1 / freq / 1000
     old_cut = cur_cut
     cwt_time = list()
+    actual_time = list()
     cwt_cut = cur_cut
     e = None
 
@@ -190,6 +191,7 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
             # Конкатенация времени в массив типа Double
             if flush_time:
                 cwt_time = np.ndarray((1,), buffer=astr_time, dtype=DOUBLE, order='C')
+                actual_time = np.ndarray((1,), buffer=datetime.now().timestamp(), dtype=DOUBLE, order='C')
                 flush_time = False
             else:
                 cwt_time = np.concatenate((cwt_time,
@@ -197,6 +199,11 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
                                                       buffer=astr_time,
                                                       dtype=DOUBLE, order='C')),
                                           axis=0)
+                actual_time = np.concatenate((actual_time,
+                                              np.ndarray((1,),
+                                                         buffer=datetime.now().timestamp(),
+                                                         dtype=DOUBLE, order='C')),
+                                             axis=0)
             #
 
             # Отправка массива данных в очередь для дальнейшей обработки с окном, равным CwtFreq
@@ -207,6 +214,7 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
                 data_payload.mv_cut = INT64(cur_cut)
                 data_payload.mv_data_length = INT64(data_len)
                 data_payload.mv_timestamp = cwt_time[-(data_len + SMOOTH):, ]
+                data_payload.mv_timestamp = actual_time[-(data_len + SMOOTH):, ]
                 data_payload.mv_data = _frame_ret(data_mv, data_len + SMOOTH)
                 data_q.put(data_payload, PUTBLOCK, PUTTIMEOUT)
                 # print('\nРазмер окна: ' + str(data_len) + '\nСечение: ' + str(cur_cut))
@@ -247,6 +255,7 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
                              cwt_time[(SMOOTH_CUTRANGE + 50):(SMOOTH_CUTRANGE + 50) + len(analyzed[0])]))
             times = np.array(list(map(_2sec, timed)))
             times = times - np.min(times)
+            actual_timed = cwt_time[(SMOOTH_CUTRANGE + 50):(SMOOTH_CUTRANGE + 50) + len(analyzed[0])]
 
             for i in range(channels):
                 ar1 = (data_mv[i])[(SMOOTH_CUTRANGE + 50):(SMOOTH_CUTRANGE + 50) + len(analyzed[i])]
@@ -259,7 +268,8 @@ def file_mapping(sock, data_q, shutdown_e, lock_q):
                 plt.xticks()
                 plt.savefig('Channel_' + str(i + 1) + '_cwt.svg')
                 plt.clf()
-                ar = np.vstack((timed, ar1))
+                ar = np.vstack((timed, actual_timed))
+                ar = np.vstack((ar, ar1))
                 ar = np.transpose(np.vstack((ar, ar2)))
                 np.savetxt('Channel_' + str(i + 1) + '_cwt.csv', ar,
                            header='Time,MV,CWT', delimiter=",", encoding='utf-8', fmt='%s')
